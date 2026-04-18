@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jaeger-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP server for Jaeger distributed tracing — search traces, inspect spans, map service dependencies."
 readme = "README.md"
 license = { text = "MIT" }

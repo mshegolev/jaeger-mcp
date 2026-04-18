@@ -1,5 +1,7 @@
 # jaeger-mcp
 
+<!-- mcp-name: io.github.mshegolev/jaeger-mcp -->
+
 [![PyPI version](https://img.shields.io/pypi/v/jaeger-mcp.svg)](https://pypi.org/project/jaeger-mcp/)
 [![Python versions](https://img.shields.io/pypi/pyversions/jaeger-mcp.svg)](https://pypi.org/project/jaeger-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
