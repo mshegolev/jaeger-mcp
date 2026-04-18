@@ -1,52 +1,55 @@
 {
-  "id": "io.github.mshegolev/jaeger-mcp",
-  "name": "jaeger-mcp",
-  "description": "MCP server for Jaeger: search traces, inspect spans, map service dependencies.",
-  "version": "0.1.0",
-  "author": "Mikhail Shchegolev",
-  "license": "MIT",
-  "homepage": "https://github.com/mshegolev/jaeger-mcp",
-  "repository": "https://github.com/mshegolev/jaeger-mcp",
-  "package": {
-    "registry": "pypi",
-    "name": "jaeger-mcp",
-    "version": "0.1.0"
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mshegolev/jaeger-mcp",
+  "description": "Jaeger MCP — search traces, inspect spans, map service dependencies (read-only).",
+  "repository": {
+    "url": "https://github.com/mshegolev/jaeger-mcp",
+    "source": "github"
   },
-  "transport": [
+  "version": "0.1.0",
+  "packages": [
     {
-      "type": "stdio",
-      "command": "jaeger-mcp"
+      "registryType": "pypi",
+      "identifier": "jaeger-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "JAEGER_URL",
+          "description": "Jaeger query service URL, e.g. https://jaeger.example.com",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "JAEGER_TOKEN",
+          "description": "Bearer token for authentication. Takes priority over Basic auth.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "JAEGER_USERNAME",
+          "description": "HTTP Basic auth username. Used only when JAEGER_TOKEN is not set.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "JAEGER_PASSWORD",
+          "description": "HTTP Basic auth password.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "JAEGER_SSL_VERIFY",
+          "description": "Verify SSL certificates (true/false). Set to 'false' for self-signed certs.",
+          "isRequired": false,
+          "format": "string",
+          "default": "true"
+        }
+      ]
     }
-  ],
-  "tools": [
-    "jaeger_list_services",
-    "jaeger_list_operations",
-    "jaeger_search_traces",
-    "jaeger_get_trace",
-    "jaeger_get_dependencies"
-  ],
-  "env": {
-    "JAEGER_URL": {
-      "description": "Jaeger query service URL, e.g. https://jaeger.example.com",
-      "required": true
-    },
-    "JAEGER_TOKEN": {
-      "description": "Bearer token for authentication (optional)",
-      "required": false,
-      "secret": true
-    },
-    "JAEGER_USERNAME": {
-      "description": "Username for HTTP Basic auth (optional, used if JAEGER_TOKEN is not set)",
-      "required": false
-    },
-    "JAEGER_PASSWORD": {
-      "description": "Password for HTTP Basic auth (optional)",
-      "required": false,
-      "secret": true
-    },
-    "JAEGER_SSL_VERIFY": {
-      "description": "Set to false to skip SSL certificate verification (default: true)",
-      "required": false
-    }
-  }
+  ]
 }

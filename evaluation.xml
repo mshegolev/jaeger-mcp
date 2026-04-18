@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+jaeger-mcp evaluation suite (10 read-only QA pairs).
+
+Per mcp-builder Phase 4 spec. Answers are PLACEHOLDER because this MCP wraps
+a customer-owned external service without a shared fixture. See EVALUATION.md
+for how to fill in answers against a live Jaeger instance.
+-->
+<evaluation>
+  <qa_pair>
+    <question>Among all services that Jaeger has observed, how many distinct service names start with the prefix "api-"? Respond with an integer.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>For the first service returned by jaeger_list_services (alphabetically), how many distinct operations has Jaeger recorded? Respond with an integer.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>Take the 20 most recent traces for the service with the most operations. Among those traces, what is the maximum duration in microseconds? Respond with a numeric integer.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>Search for traces where tags include http.status_code=500 on any service in the last 24 hours (use microseconds since epoch for start). How many traces are returned (limit=100)? Respond with an integer.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>Take any trace returned by jaeger_search_traces. For that trace, what is the root span's service name? Respond with the exact service name string.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>For the same trace, which service (by name) has the highest total_duration_us in the per-service breakdown? Respond with the service name.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>Query jaeger_get_dependencies for the last 24 hours. Which service appears as the parent in the most distinct edges? Respond with the service name.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>From jaeger_get_dependencies for the last 24 hours, what is the total call_count across all edges? Respond with an integer.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>Find a trace (any) that has at least one span with tags["error"]="true". What is the operation name of the first error span (by start_time)? Respond with the operation name string.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>Among recent traces for the first service, find the trace with the most spans (limit=20 search). How many spans does that trace contain? Respond with an integer.</question>
+    <answer>__VERIFY_ON_INSTANCE__</answer>
+  </qa_pair>
+</evaluation>
