@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jaeger-mcp"
+version = "0.1.0"
+description = "MCP server for Jaeger distributed tracing — search traces, inspect spans, map service dependencies."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Mikhail Shchegolev" },
+]
+keywords = ["mcp", "jaeger", "tracing", "observability", "opentelemetry", "claude", "anthropic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    "mcp>=1.2",
+    "requests>=2.31",
+    "urllib3>=2.0",
+    "pydantic>=2.0",
+    "typing-extensions>=4.5; python_version < '3.12'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "ruff>=0.5",
+    "responses>=0.25",
+    "pytest-cov>=4",
+]
+
+[project.scripts]
+jaeger-mcp = "jaeger_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/mshegolev/jaeger-mcp"
+Issues = "https://github.com/mshegolev/jaeger-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jaeger_mcp"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
