@@ -380,6 +380,7 @@ def jaeger_get_trace(
         Field(
             min_length=16,
             max_length=32,
+            pattern=r"^[0-9a-fA-F]+$",
             description=(
                 "Trace ID as a hex string (16 or 32 hex chars). "
                 "Example: 'abcdef1234567890abcdef1234567890'. "
