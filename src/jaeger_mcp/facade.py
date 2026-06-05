@@ -29,11 +29,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from jaeger_mcp.client import JaegerHTTPClient
-from jaeger_mcp.tools import (
-    _find_root_span,
-    _shape_trace_summary as _raw_trace_summary,
-    _span_is_error,
-    _span_tags_flat,
+from jaeger_mcp.shaping import (
+    find_root_span as _find_root_span,
+    shape_trace_summary as _raw_trace_summary,
+    span_is_error as _span_is_error,
+    span_tags_flat as _span_tags_flat,
 )
 
 

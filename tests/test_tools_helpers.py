@@ -7,14 +7,14 @@ them directly without mocking any HTTP client.
 
 from __future__ import annotations
 
-from jaeger_mcp.tools import (
-    _build_execution_tree,
-    _find_root_span,
-    _shape_span_detail,
-    _shape_trace_summary,
-    _span_is_error,
-    _span_tags_flat,
-    _truncation_hint,
+from jaeger_mcp.shaping import (
+    build_execution_tree as _build_execution_tree,
+    find_root_span as _find_root_span,
+    shape_span_detail as _shape_span_detail,
+    shape_trace_summary as _shape_trace_summary,
+    span_is_error as _span_is_error,
+    span_tags_flat as _span_tags_flat,
+    truncation_hint as _truncation_hint,
 )
 
 

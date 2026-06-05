@@ -20,6 +20,7 @@ The public-facing ``JaegerClient`` facade lives in :mod:`jaeger_mcp.facade`.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -32,6 +33,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from jaeger_mcp.errors import ConfigError
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_bool(value: str | bool | None, *, default: bool) -> bool:
@@ -164,6 +167,7 @@ class JaegerHTTPClient:
             self.session.auth = (self.username, self.password)
 
         if not self.ssl_verify:
+            logger.warning("ssl_verify=false url=%s — TLS certificate verification disabled", self.url)
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def _request(
@@ -173,14 +177,29 @@ class JaegerHTTPClient:
         *,
         params: dict[str, Any] | None = None,
     ) -> requests.Response:
-        response = self.session.request(
-            method=method,
-            url=f"{self.api_url}{endpoint}",
-            params=params,
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        return response
+        url = f"{self.api_url}{endpoint}"
+        t0 = time.monotonic()
+        try:
+            response = self.session.request(
+                method=method,
+                url=url,
+                params=params,
+                timeout=self.timeout,
+            )
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.info(
+                "method=%s url=%s status=%d ms=%.1f",
+                method,
+                url,
+                response.status_code,
+                elapsed_ms,
+            )
+            response.raise_for_status()
+            return response
+        except Exception:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.info("method=%s url=%s status=ERR ms=%.1f", method, url, elapsed_ms)
+            raise
 
     # ── Cache helpers (JGR-04) ────────────────────────────────────────
 
