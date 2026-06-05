@@ -10,11 +10,11 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from jaeger_mcp.client import JaegerClient
+from jaeger_mcp.client import JaegerHTTPClient
 
 logger = logging.getLogger(__name__)
 
-_client: JaegerClient | None = None
+_client: JaegerHTTPClient | None = None
 _client_lock = threading.Lock()
 
 
@@ -39,8 +39,8 @@ async def app_lifespan(_app: FastMCP) -> AsyncIterator[dict[str, Any]]:
 mcp = FastMCP("jaeger_mcp", lifespan=app_lifespan)
 
 
-def get_client() -> JaegerClient:
-    """Return a cached :class:`JaegerClient` (thread-safe lazy-init).
+def get_client() -> JaegerHTTPClient:
+    """Return a cached :class:`JaegerHTTPClient` (thread-safe lazy-init).
 
     FastMCP runs synchronous tools in worker threads via
     ``anyio.to_thread.run_sync``; concurrent first-calls could otherwise
@@ -51,5 +51,5 @@ def get_client() -> JaegerClient:
     if _client is None:
         with _client_lock:
             if _client is None:  # double-checked locking
-                _client = JaegerClient()
+                _client = JaegerHTTPClient()
     return _client

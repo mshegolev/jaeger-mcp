@@ -13,6 +13,9 @@ is unauthenticated — valid for many internal Jaeger deployments.
 runs synchronous ``@mcp.tool`` in a worker thread via
 ``anyio.to_thread.run_sync``, so blocking HTTP calls don't block the
 asyncio event loop.
+
+**Naming:** ``JaegerHTTPClient`` is the low-level HTTP transport.
+The public-facing ``JaegerClient`` facade lives in :mod:`jaeger_mcp.facade`.
 """
 
 from __future__ import annotations
@@ -59,7 +62,7 @@ def _validate_url(url: str) -> str:
     return cleaned.rstrip("/")
 
 
-class JaegerClient:
+class JaegerHTTPClient:
     """Minimal Jaeger Query HTTP API client.
 
     The client reads ``JAEGER_URL``, ``JAEGER_TOKEN``, ``JAEGER_USERNAME``,
