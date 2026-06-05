@@ -21,11 +21,15 @@ The public-facing ``JaegerClient`` facade lives in :mod:`jaeger_mcp.facade`.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from typing import Any
 from urllib.parse import urlparse
 
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from jaeger_mcp.errors import ConfigError
 
@@ -93,6 +97,9 @@ class JaegerHTTPClient:
         username: str | None = None,
         password: str | None = None,
         ssl_verify: bool | None = None,
+        timeout: float | None = None,
+        retry_attempts: int | None = None,
+        cache_ttl: float | None = None,
     ) -> None:
         raw_url = url if url is not None else os.environ.get("JAEGER_URL", "")
         self.url = _validate_url(raw_url)
@@ -106,6 +113,26 @@ class JaegerHTTPClient:
             ssl_verify = _parse_bool(os.environ.get("JAEGER_SSL_VERIFY"), default=True)
         self.ssl_verify = ssl_verify
 
+        # JGR-09: Configurable timeout (seconds). Default 30s.
+        if timeout is not None:
+            self.timeout = timeout
+        else:
+            self.timeout = float(os.environ.get("JAEGER_TIMEOUT", "30"))
+
+        # JGR-03: Retry with exponential backoff. Default 3 attempts.
+        if retry_attempts is not None:
+            retries = retry_attempts
+        else:
+            retries = int(os.environ.get("JAEGER_RETRY_ATTEMPTS", "3"))
+
+        # JGR-04: TTL cache for discovery endpoints. Default 120s.
+        if cache_ttl is not None:
+            self.cache_ttl = cache_ttl
+        else:
+            self.cache_ttl = float(os.environ.get("JAEGER_CACHE_TTL", "120"))
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._cache_lock = threading.Lock()
+
         self.session = requests.Session()
         self.session.verify = self.ssl_verify
         self.session.headers.update(
@@ -116,6 +143,19 @@ class JaegerHTTPClient:
         )
         # Jaeger is typically an internal service not reachable via env proxy.
         self.session.trust_env = False
+
+        # Mount retry adapter (JGR-03).
+        if retries > 0:
+            retry = Retry(
+                total=retries,
+                backoff_factor=1,  # 1s, 2s, 4s …
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["GET"],
+                raise_on_status=False,
+            )
+            adapter = HTTPAdapter(max_retries=retry)
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
 
         # Auth priority: Bearer > Basic > none.
         if self.token:
@@ -137,21 +177,64 @@ class JaegerHTTPClient:
             method=method,
             url=f"{self.api_url}{endpoint}",
             params=params,
-            timeout=30,
+            timeout=self.timeout,
         )
         response.raise_for_status()
         return response
+
+    # ── Cache helpers (JGR-04) ────────────────────────────────────────
+
+    def _cache_get(self, key: str) -> Any | None:
+        """Return cached value if TTL hasn't expired, else None."""
+        if self.cache_ttl <= 0:
+            return None
+        with self._cache_lock:
+            entry = self._cache.get(key)
+            if entry is not None:
+                ts, value = entry
+                if time.monotonic() - ts < self.cache_ttl:
+                    return value
+                del self._cache[key]
+        return None
+
+    def _cache_set(self, key: str, value: Any) -> None:
+        """Store a value in the cache with current timestamp."""
+        if self.cache_ttl <= 0:
+            return
+        with self._cache_lock:
+            self._cache[key] = (time.monotonic(), value)
 
     def get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
         """GET ``{api_url}{endpoint}`` and return parsed JSON.
 
         Jaeger always returns JSON for 2xx responses; returns ``None`` for
         empty bodies.
+
+        Discovery endpoints (``/services`` and ``/services/*/operations``)
+        are cached for ``cache_ttl`` seconds (JGR-04).
         """
+        # Check cache for discovery endpoints.
+        cache_key: str | None = None
+        if endpoint == "/services" and params is None:
+            cache_key = "services"
+        elif endpoint.endswith("/operations") and endpoint.startswith("/services/"):
+            cache_key = f"ops:{endpoint}"
+
+        if cache_key is not None:
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                return cached
+
         response = self._request("GET", endpoint, params=params)
         if not response.content:
             return None
-        return response.json()
+        result = response.json()
+
+        # Store in cache if this was a discovery endpoint.
+        if cache_key is not None:
+            self._cache_set(cache_key, result)
+
+        return result
 
     def close(self) -> None:
         """Close the underlying HTTP session (called from lifespan on shutdown)."""
