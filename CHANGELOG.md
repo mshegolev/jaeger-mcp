@@ -5,6 +5,38 @@ All notable changes to `jaeger-mcp` will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 versioning: [SemVer](https://semver.org/).
 
+## [0.2.0] — 2026-06-06
+
+### Added
+
+- **Library facade** — `from jaeger_mcp import JaegerClient` for in-process use without MCP server
+  - `JaegerClient.from_env()` constructs from `JAEGER_URL` environment variable
+  - Typed domain objects: `Span`, `Trace`, `TraceSummary`, `ServiceDep`
+  - Evidence-required fields: `start_utc` (UTC datetime), `error` (bool), `service_name`, `tags`
+- **HTTP retry with exponential backoff** — retries on 429/500/502/503/504 with 1s/2s/4s delays
+  - Configurable via `JAEGER_RETRY_ATTEMPTS` env var (default 3, set 0 to disable)
+- **TTL cache for discovery endpoints** — `list_services` and `list_operations` cached in-memory
+  - Configurable via `JAEGER_CACHE_TTL` env var (default 120s, set 0 to disable)
+- **Configurable HTTP timeout** — via `JAEGER_TIMEOUT` env var (default 30s)
+- **Structured request logging** — every HTTP request logs method, URL, status code, latency (ms)
+- **SSL warning** — `WARNING` log emitted when `JAEGER_SSL_VERIFY=false`
+- **trace_id hex validation** — rejects non-hex characters before making HTTP call
+
+### Changed
+
+- Internal HTTP client renamed from `JaegerClient` to `JaegerHTTPClient`
+  - Public `JaegerClient` name now belongs to the library facade
+- Data-shaping helpers extracted from `tools.py` into new `shaping.py` module
+  - `tools.py` reduced from 723 to 601 lines
+
+### Security
+
+- Dockerfile now runs as non-root user `mcp` (was root)
+
+### CI
+
+- Coverage threshold enforced: `--cov-fail-under=90` (current: 95.77%)
+
 ## [0.1.0] — 2026-04-18
 
 ### Added

@@ -53,6 +53,9 @@ All configuration is via environment variables:
 | `JAEGER_USERNAME` | No | — | HTTP Basic auth username |
 | `JAEGER_PASSWORD` | No | — | HTTP Basic auth password |
 | `JAEGER_SSL_VERIFY` | No | `true` | Set `false` for self-signed certificates |
+| `JAEGER_TIMEOUT` | No | `30` | HTTP request timeout in seconds |
+| `JAEGER_RETRY_ATTEMPTS` | No | `3` | Retry count for transient failures (0 to disable) |
+| `JAEGER_CACHE_TTL` | No | `120` | TTL in seconds for discovery endpoint cache (0 to disable) |
 
 Copy `.env.example` to `.env` and fill in your values.
 
@@ -144,11 +147,33 @@ Error spans are identified by `tags["error"] = "true"`.
 
 Service topology graph. Returns directed edges `(parent → child)` with `call_count`. Use `lookback_hours` (default 24, max 720) to control the window.
 
+## Library facade (in-process use)
+
+`jaeger-mcp` can also be used as a Python library without an MCP server:
+
+```python
+from jaeger_mcp import JaegerClient
+
+client = JaegerClient.from_env()  # reads JAEGER_URL from env
+trace = client.get_trace("abcdef1234567890abcdef1234567890")
+
+for span in trace.spans:
+    if span.error:
+        print(f"{span.service_name}: {span.operation} at {span.start_utc}")
+        print(f"  tags: {span.tags}")
+```
+
+Available methods: `get_trace()`, `search_traces()`, `list_services()`, `get_dependencies()`.
+
+Domain objects: `Span`, `Trace`, `TraceSummary`, `ServiceDep` — all with typed fields.
+
 ## Performance characteristics
 
 - All tools use a single persistent `requests.Session` with connection pooling.
 - The session has `trust_env = False` to bypass environment proxies (Jaeger is typically an internal service).
-- Requests time out after 30 seconds.
+- Requests time out after 30 seconds (configurable via `JAEGER_TIMEOUT`).
+- Transient HTTP errors (429/5xx) are retried with exponential backoff (configurable via `JAEGER_RETRY_ATTEMPTS`).
+- `list_services` and `list_operations` responses are cached for 120 seconds (configurable via `JAEGER_CACHE_TTL`).
 - `jaeger_search_traces` passes `limit` directly to Jaeger — avoid requesting more traces than needed.
 - `jaeger_get_trace` fetches the full trace in one call — large traces (thousands of spans) may be slow.
 - `jaeger_get_dependencies` aggregates over the full lookback window; large windows may be slow on busy clusters.
