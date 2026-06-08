@@ -125,6 +125,7 @@ def jaeger_list_operations(
         Field(
             min_length=1,
             max_length=500,
+            pattern=r"^[a-zA-Z0-9._:\-]+$",
             description="Service name exactly as returned by jaeger_list_services.",
         ),
     ],
