@@ -256,5 +256,12 @@ class JaegerHTTPClient:
         return result
 
     def close(self) -> None:
-        """Close the underlying HTTP session (called from lifespan on shutdown)."""
+        """Close the underlying HTTP session and zero credentials.
+
+        Called from lifespan on shutdown. Credential attributes are cleared
+        to reduce the window of exposure in long-running processes (JGR-12).
+        """
         self.session.close()
+        self.token = ""
+        self.username = ""
+        self.password = ""

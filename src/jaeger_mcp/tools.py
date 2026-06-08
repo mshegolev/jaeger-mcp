@@ -103,7 +103,7 @@ def jaeger_list_services() -> ServicesOutput:
         md += "\n".join(f"- `{s}`" for s in md_services)
         if len(services) > _MD_ITEM_LIMIT:
             md += _truncation_hint(len(services), _MD_ITEM_LIMIT, "services")
-        return output.ok(result, md)  # type: ignore[return-value]
+        return output.ok(result, md)
     except Exception as exc:
         output.fail(exc, "listing Jaeger services")
 
@@ -171,7 +171,7 @@ def jaeger_list_operations(
         md += "\n".join(f"- `{op}`" for op in md_ops)
         if len(operations) > _MD_ITEM_LIMIT:
             md += _truncation_hint(len(operations), _MD_ITEM_LIMIT, "operations")
-        return output.ok(result, md)  # type: ignore[return-value]
+        return output.ok(result, md)
     except Exception as exc:
         output.fail(exc, f"listing operations for service {service!r}")
 
@@ -358,7 +358,7 @@ def jaeger_search_traces(
         md = heading + "\n\n" + "\n".join(rows)
         if len(summaries) > _MD_ITEM_LIMIT:
             md += _truncation_hint(len(summaries), _MD_ITEM_LIMIT, "traces")
-        return output.ok(result, md)  # type: ignore[return-value]
+        return output.ok(result, md)
     except Exception as exc:
         output.fail(exc, f"searching traces for service {service!r}")
 
@@ -454,18 +454,13 @@ def jaeger_get_trace(
         span_details: list[SpanDetail] = [_shape_span_detail(s, processes) for s in spans]
         execution_tree = _build_execution_tree(spans, processes)
 
-        root = _find_root_span(spans)
-        root_op = root.get("operationName") if root else None
-        root_svc: str | None = None
-        if root:
-            pid = root.get("processID", "")
-            root_svc = (processes.get(pid) or {}).get("serviceName")
-
-        start_times = [s.get("startTime", 0) for s in spans if s.get("startTime")]
-        start_time_us: int | None = min(start_times) if start_times else None
-        end_times = [(s.get("startTime", 0) + s.get("duration", 0)) for s in spans]
-        total_duration_us = (max(end_times) - min(start_times)) if start_times and end_times else 0
-        errors_count = sum(s["is_error"] for s in span_details)
+        # Reuse shared trace metadata logic (JGR-14: dedup).
+        summary = _shape_trace_summary(trace)
+        root_op = summary["root_operation"]
+        root_svc = summary["root_service"]
+        start_time_us = summary["start_time_us"]
+        total_duration_us = summary["duration_us"]
+        errors_count = summary["errors_count"]
 
         result: TraceDetailOutput = {
             "trace_id": trace.get("traceID", trace_id),
@@ -499,7 +494,7 @@ def jaeger_get_trace(
             )
         if len(span_details) > _MD_ITEM_LIMIT:
             md += _truncation_hint(len(span_details), _MD_ITEM_LIMIT, "spans shown in text")
-        return output.ok(result, md)  # type: ignore[return-value]
+        return output.ok(result, md)
     except Exception as exc:
         output.fail(exc, f"fetching trace {trace_id!r}")
 
@@ -596,6 +591,6 @@ def jaeger_get_dependencies(
         md += "\n".join(f"- `{e['parent']}` → `{e['child']}` ({e['call_count']:,} calls)" for e in md_edges)
         if len(edges) > _MD_ITEM_LIMIT:
             md += _truncation_hint(len(edges), _MD_ITEM_LIMIT, "edges")
-        return output.ok(result, md)  # type: ignore[return-value]
+        return output.ok(result, md)
     except Exception as exc:
         output.fail(exc, "fetching Jaeger service dependencies")

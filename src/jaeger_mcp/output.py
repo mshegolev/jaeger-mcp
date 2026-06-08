@@ -11,7 +11,7 @@ from mcp.types import CallToolResult, TextContent
 from jaeger_mcp import errors
 
 
-def ok(data: Mapping[str, Any], markdown: str) -> CallToolResult:
+def ok(data: Mapping[str, Any], markdown: str) -> Any:
     """Wrap ``data`` + a markdown rendering into a non-error tool result."""
     return CallToolResult(
         content=[TextContent(type="text", text=markdown)],

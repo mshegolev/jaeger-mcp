@@ -31,7 +31,7 @@ async def app_lifespan(_app: FastMCP) -> AsyncIterator[dict[str, Any]]:
                 try:
                     _client.close()
                 except Exception:
-                    pass
+                    logger.warning("jaeger_mcp: error closing HTTP client on shutdown", exc_info=True)
                 _client = None
         logger.debug("jaeger_mcp: shutdown — HTTP session closed")
 
