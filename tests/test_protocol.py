@@ -145,3 +145,53 @@ def test_get_dependencies_lookback_documented(listed_tools: list[Any]) -> None:
     tool = next(t for t in listed_tools if t.name == "jaeger_get_dependencies")
     desc = tool.inputSchema["properties"]["lookback_hours"].get("description", "")
     assert "720" in desc
+
+
+# ── JGR-16: Service name URL sanitization ──────────────────────────────────
+
+
+def test_list_operations_rejects_path_unsafe_service_names(listed_tools: list[Any]) -> None:
+    """Service name with '/' or '..' must be rejected by the pattern constraint.
+
+    The pattern ^[a-zA-Z0-9._:\\-]+$ on the service Field forbids
+    path-traversal characters.  FastMCP enforces this via Pydantic
+    validation before the tool function is ever called.
+
+    JGR-16 acceptance: "Test: service name with / or .. is rejected."
+    """
+    import re
+
+    from pydantic import ValidationError
+
+    tool = next(t for t in listed_tools if t.name == "jaeger_list_operations")
+    svc_schema = tool.inputSchema["properties"]["service"]
+    pattern = svc_schema.get("pattern")
+
+    # Pattern must exist in the published schema
+    assert pattern is not None, "service field has no pattern constraint"
+
+    regex = re.compile(pattern)
+
+    # These must be rejected (path-unsafe)
+    for bad in ["../etc/passwd", "svc/sub", "foo/../bar", "a/b"]:
+        assert regex.fullmatch(bad) is None, f"pattern should reject {bad!r}"
+
+    # Also validate via Pydantic TypeAdapter (same codepath FastMCP uses)
+    import typing
+
+    from pydantic import TypeAdapter
+
+    from jaeger_mcp.tools import jaeger_list_operations
+
+    hints = typing.get_type_hints(jaeger_list_operations, include_extras=True)
+    service_type = hints["service"]
+    ta = TypeAdapter(service_type)
+
+    for bad in ["svc/sub", "../etc", "a/../b"]:
+        with pytest.raises(ValidationError, match="string_pattern_mismatch"):
+            ta.validate_python(bad)
+
+    # Normal service names must still pass
+    for good in ["order-service", "my.svc", "svc_v2", "host:8080"]:
+        assert regex.fullmatch(good) is not None, f"pattern should accept {good!r}"
+        ta.validate_python(good)  # must not raise
