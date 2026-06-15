@@ -127,3 +127,33 @@ class DependenciesOutput(TypedDict):
     lookback_hours: int
     edge_count: int
     edges: list[DependencyEdge]
+
+
+# ── Trace comparison ─────────────────────────────────────────────────────
+
+
+class MatchedSpanSummary(TypedDict):
+    operation_name: str
+    service: str
+    parent_operation: str | None
+
+
+class ChangedSpan(TypedDict):
+    operation_name: str
+    service: str
+    parent_operation: str | None
+    duration_a_us: int
+    duration_b_us: int
+    duration_delta_us: int
+    tags_added: dict[str, str]
+    tags_removed: dict[str, str]
+    tags_changed: dict[str, str]
+
+
+class CompareTracesOutput(TypedDict):
+    trace_id_a: str
+    trace_id_b: str
+    added_spans: list[MatchedSpanSummary]
+    removed_spans: list[MatchedSpanSummary]
+    changed_spans: list[ChangedSpan]
+    unchanged_count: int
