@@ -11,7 +11,10 @@ from __future__ import annotations
 from typing import Any
 
 from jaeger_mcp.models import (
+    ChangedSpan,
+    CompareTracesOutput,
     ExecutionNode,
+    MatchedSpanSummary,
     SpanDetail,
     TraceSummary,
 )
@@ -143,6 +146,153 @@ def shape_span_detail(span: dict[str, Any], processes: dict[str, Any]) -> SpanDe
     }
 
 
+# ── Trace comparison ──────────────────────────────────────────────────────
+
+
+def span_match_key(
+    span: dict[str, Any],
+    processes: dict[str, Any],
+    span_map: dict[str, dict[str, Any]],
+) -> tuple[str, str, str | None]:
+    """Return the structural identity key for a span.
+
+    The key is ``(operationName, serviceName, parentOperation)`` — the
+    ``parentOperation`` is the operation name of the parent span (resolved
+    from ``CHILD_OF`` references), or ``None`` for root spans.
+
+    Args:
+        span: Raw Jaeger span dict.
+        processes: Jaeger processes map (processID → {serviceName, …}).
+        span_map: Mapping of spanID → span dict for parent resolution.
+
+    Returns:
+        A 3-tuple suitable as a dict key for span matching.
+    """
+    operation_name: str = span.get("operationName", "")
+    pid = span.get("processID", "")
+    service_name: str = (processes.get(pid) or {}).get("serviceName", pid)
+
+    parent_operation: str | None = None
+    for ref in span.get("references") or []:
+        if ref.get("refType") == "CHILD_OF":
+            parent_id = ref.get("spanID")
+            if parent_id and parent_id in span_map:
+                parent_operation = span_map[parent_id].get("operationName", "")
+            break
+
+    return (operation_name, service_name, parent_operation)
+
+
+def compare_traces_diff(
+    trace_a: dict[str, Any],
+    trace_b: dict[str, Any],
+) -> CompareTracesOutput:
+    """Structurally diff two raw Jaeger traces.
+
+    Matches spans by ``(operationName, serviceName, parentOperation)``
+    tuple (not span IDs).  Duplicate keys (e.g. loop calls) are paired
+    by position order.
+
+    Args:
+        trace_a: Raw Jaeger trace dict (baseline).
+        trace_b: Raw Jaeger trace dict (comparison).
+
+    Returns:
+        A :class:`CompareTracesOutput` with added, removed, changed spans
+        and unchanged count.
+    """
+    spans_a: list[dict[str, Any]] = trace_a.get("spans") or []
+    spans_b: list[dict[str, Any]] = trace_b.get("spans") or []
+    procs_a: dict[str, Any] = trace_a.get("processes") or {}
+    procs_b: dict[str, Any] = trace_b.get("processes") or {}
+
+    span_map_a: dict[str, dict[str, Any]] = {s["spanID"]: s for s in spans_a if s.get("spanID")}
+    span_map_b: dict[str, dict[str, Any]] = {s["spanID"]: s for s in spans_b if s.get("spanID")}
+
+    # Group spans by match key, preserving order for duplicate handling.
+    def _group_by_key(
+        spans: list[dict[str, Any]],
+        processes: dict[str, Any],
+        smap: dict[str, dict[str, Any]],
+    ) -> dict[tuple[str, str, str | None], list[dict[str, Any]]]:
+        groups: dict[tuple[str, str, str | None], list[dict[str, Any]]] = {}
+        for span in spans:
+            key = span_match_key(span, processes, smap)
+            groups.setdefault(key, []).append(span)
+        return groups
+
+    groups_a = _group_by_key(spans_a, procs_a, span_map_a)
+    groups_b = _group_by_key(spans_b, procs_b, span_map_b)
+
+    all_keys = set(groups_a) | set(groups_b)
+
+    added_spans: list[MatchedSpanSummary] = []
+    removed_spans: list[MatchedSpanSummary] = []
+    changed_spans: list[ChangedSpan] = []
+    unchanged_count = 0
+
+    def _make_summary(key: tuple[str, str, str | None]) -> MatchedSpanSummary:
+        return {
+            "operation_name": key[0],
+            "service": key[1],
+            "parent_operation": key[2],
+        }
+
+    for key in sorted(all_keys):
+        list_a = groups_a.get(key, [])
+        list_b = groups_b.get(key, [])
+
+        paired = min(len(list_a), len(list_b))
+
+        # Pair by position order (D-02)
+        for i in range(paired):
+            sa = list_a[i]
+            sb = list_b[i]
+
+            dur_a = sa.get("duration", 0)
+            dur_b = sb.get("duration", 0)
+            tags_a = span_tags_flat(sa)
+            tags_b = span_tags_flat(sb)
+
+            t_added = {k: tags_b[k] for k in tags_b if k not in tags_a}
+            t_removed = {k: tags_a[k] for k in tags_a if k not in tags_b}
+            t_changed = {k: tags_b[k] for k in tags_a if k in tags_b and tags_a[k] != tags_b[k]}
+
+            if dur_a != dur_b or t_added or t_removed or t_changed:
+                changed_spans.append(
+                    {
+                        "operation_name": key[0],
+                        "service": key[1],
+                        "parent_operation": key[2],
+                        "duration_a_us": dur_a,
+                        "duration_b_us": dur_b,
+                        "duration_delta_us": dur_b - dur_a,
+                        "tags_added": t_added,
+                        "tags_removed": t_removed,
+                        "tags_changed": t_changed,
+                    }
+                )
+            else:
+                unchanged_count += 1
+
+        # Extras in A → removed
+        for i in range(paired, len(list_a)):
+            removed_spans.append(_make_summary(key))
+
+        # Extras in B → added
+        for i in range(paired, len(list_b)):
+            added_spans.append(_make_summary(key))
+
+    return {
+        "trace_id_a": trace_a.get("traceID", ""),
+        "trace_id_b": trace_b.get("traceID", ""),
+        "added_spans": added_spans,
+        "removed_spans": removed_spans,
+        "changed_spans": changed_spans,
+        "unchanged_count": unchanged_count,
+    }
+
+
 # ── Backward-compatible aliases (underscore-prefixed) ─────────────────
 # These allow existing imports from tools.py and facade.py to keep working
 # during transition. Prefer the public names above for new code.
@@ -154,3 +304,5 @@ _find_root_span = find_root_span
 _build_execution_tree = build_execution_tree
 _shape_trace_summary = shape_trace_summary
 _shape_span_detail = shape_span_detail
+_span_match_key = span_match_key
+_compare_traces_diff = compare_traces_diff
