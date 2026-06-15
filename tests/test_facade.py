@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jaeger_mcp import JaegerClient, ServiceDep, Span, Trace, TraceSummary
+from jaeger_mcp import JaegerClient, ServiceDep, Span, SpanChange, SpanIdentity, Trace, TraceComparison, TraceSummary
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -97,9 +97,21 @@ class TestImport:
 
     def test_all_domain_types_importable(self) -> None:
         """All facade domain types are importable from the package."""
-        from jaeger_mcp import JaegerClient, ServiceDep, Span, Trace, TraceSummary
+        from jaeger_mcp import (
+            JaegerClient,
+            ServiceDep,
+            Span,
+            SpanChange,
+            SpanIdentity,
+            Trace,
+            TraceComparison,
+            TraceSummary,
+        )
 
-        assert all(cls is not None for cls in [JaegerClient, Span, Trace, TraceSummary, ServiceDep])
+        assert all(
+            cls is not None
+            for cls in [JaegerClient, Span, SpanChange, SpanIdentity, Trace, TraceComparison, TraceSummary, ServiceDep]
+        )
 
 
 # ── from_env (JGR-01) ────────────────────────────────────────────────────
@@ -326,3 +338,150 @@ class TestContextManager:
         with JaegerClient(mock_http) as client:
             assert client is not None
         mock_http.close.assert_called_once()
+
+
+# ── compare_traces ────────────────────────────────────────────────────────
+
+
+def _make_comparison_response(
+    trace_id: str,
+    *,
+    root_op: str = "GET /orders",
+    root_svc: str = "order-service",
+    child_op: str = "db.query",
+    child_svc: str = "db-service",
+    child_duration: int = 200_000,
+    child_tags: list[dict] | None = None,
+) -> dict:
+    """Build a mock Jaeger API response for compare_traces tests."""
+    return {
+        "data": [
+            {
+                "traceID": trace_id,
+                "spans": [
+                    {
+                        "spanID": "span-root",
+                        "operationName": root_op,
+                        "processID": "p1",
+                        "startTime": 1_700_000_000_000_000,
+                        "duration": 500_000,
+                        "references": [],
+                        "tags": [],
+                    },
+                    {
+                        "spanID": "span-child",
+                        "operationName": child_op,
+                        "processID": "p2",
+                        "startTime": 1_700_000_000_100_000,
+                        "duration": child_duration,
+                        "references": [{"refType": "CHILD_OF", "spanID": "span-root"}],
+                        "tags": child_tags or [],
+                    },
+                ],
+                "processes": {
+                    "p1": {"serviceName": root_svc},
+                    "p2": {"serviceName": child_svc},
+                },
+            }
+        ]
+    }
+
+
+class TestCompareTraces:
+    def test_compare_traces_happy_path(self) -> None:
+        """Two different traces → TraceComparison with correct changed_spans."""
+        mock_http = MagicMock()
+        resp_a = _make_comparison_response("aaa111", child_duration=200_000)
+        resp_b = _make_comparison_response("bbb222", child_duration=300_000)
+        mock_http.get.side_effect = [resp_a, resp_b]
+        client = JaegerClient(mock_http)
+        result = client.compare_traces("aaa111", "bbb222")
+
+        assert isinstance(result, TraceComparison)
+        assert result.trace_id_a == "aaa111"
+        assert result.trace_id_b == "bbb222"
+        assert result.unchanged_count == 1  # root span unchanged
+        assert len(result.changed_spans) == 1
+        assert result.changed_spans[0].duration_delta_us == 100_000
+        assert result.changed_spans[0].operation_name == "db.query"
+
+    def test_compare_traces_identical(self) -> None:
+        """Same traces → unchanged_count == span count, empty changed."""
+        mock_http = MagicMock()
+        resp_a = _make_comparison_response("aaa111")
+        resp_b = _make_comparison_response("bbb222")
+        mock_http.get.side_effect = [resp_a, resp_b]
+        client = JaegerClient(mock_http)
+        result = client.compare_traces("aaa111", "bbb222")
+
+        assert result.unchanged_count == 2
+        assert result.added_spans == []
+        assert result.removed_spans == []
+        assert result.changed_spans == []
+
+    def test_compare_traces_empty_trace_raises(self) -> None:
+        """Empty data for trace A → raises ValueError."""
+        mock_http = MagicMock()
+        mock_http.get.return_value = {"data": []}
+        client = JaegerClient(mock_http)
+        with pytest.raises(ValueError, match="trace_id_a"):
+            client.compare_traces("aaa111", "bbb222")
+
+    def test_compare_traces_fully_different(self) -> None:
+        """Disjoint spans → all added + all removed, 0 unchanged."""
+        mock_http = MagicMock()
+        resp_a = _make_comparison_response(
+            "aaa111",
+            root_op="GET /orders",
+            root_svc="order-service",
+            child_op="db.query",
+            child_svc="db-service",
+        )
+        resp_b = {
+            "data": [
+                {
+                    "traceID": "bbb222",
+                    "spans": [
+                        {
+                            "spanID": "s1",
+                            "operationName": "POST /payments",
+                            "processID": "p1",
+                            "startTime": 1_700_000_000_000_000,
+                            "duration": 400_000,
+                            "references": [],
+                            "tags": [],
+                        },
+                    ],
+                    "processes": {
+                        "p1": {"serviceName": "payment-service"},
+                    },
+                }
+            ]
+        }
+        mock_http.get.side_effect = [resp_a, resp_b]
+        client = JaegerClient(mock_http)
+        result = client.compare_traces("aaa111", "bbb222")
+
+        assert len(result.removed_spans) > 0  # A's spans
+        assert len(result.added_spans) > 0  # B's spans
+        assert result.unchanged_count == 0
+        # All added_spans are SpanIdentity instances
+        for s in result.added_spans:
+            assert isinstance(s, SpanIdentity)
+
+    def test_compare_traces_span_types(self) -> None:
+        """Verify result contains SpanIdentity and SpanChange instances."""
+        mock_http = MagicMock()
+        resp_a = _make_comparison_response("aaa111", child_duration=200_000)
+        resp_b = _make_comparison_response("bbb222", child_duration=300_000)
+        mock_http.get.side_effect = [resp_a, resp_b]
+        client = JaegerClient(mock_http)
+        result = client.compare_traces("aaa111", "bbb222")
+
+        # Changed spans are SpanChange instances
+        for c in result.changed_spans:
+            assert isinstance(c, SpanChange)
+            assert hasattr(c, "duration_delta_us")
+            assert hasattr(c, "tags_added")
+            assert hasattr(c, "tags_removed")
+            assert hasattr(c, "tags_changed")
