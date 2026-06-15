@@ -24,6 +24,7 @@ from jaeger_mcp.tools import (
     jaeger_list_operations,
     jaeger_list_services,
     jaeger_search_traces,
+    jaeger_span_statistics,
 )
 
 BASE = "https://jaeger.example.com"
@@ -713,3 +714,184 @@ def test_compare_traces_fully_different() -> None:
     assert len(data["added_spans"]) == 1  # B's one span
     assert data["unchanged_count"] == 0
     assert data["changed_spans"] == []
+
+
+# ── jaeger_span_statistics ────────────────────────────────────────────────
+
+
+def _make_stats_traces() -> list[dict]:
+    """Build two traces with overlapping operations for statistics tests."""
+    return [
+        {
+            "traceID": "aaa111bbb222ccc333ddd444eee55566",
+            "spans": [
+                {
+                    "spanID": "s1",
+                    "operationName": "GET /orders",
+                    "duration": 1000,
+                    "processID": "p1",
+                    "tags": [],
+                    "references": [],
+                },
+                {
+                    "spanID": "s2",
+                    "operationName": "db.query",
+                    "duration": 500,
+                    "processID": "p1",
+                    "tags": [],
+                    "references": [{"refType": "CHILD_OF", "spanID": "s1"}],
+                },
+            ],
+            "processes": {"p1": {"serviceName": "order-service"}},
+        },
+        {
+            "traceID": "fff666eee555ddd444ccc333bbb22211",
+            "spans": [
+                {
+                    "spanID": "s1",
+                    "operationName": "GET /orders",
+                    "duration": 2000,
+                    "processID": "p1",
+                    "tags": [],
+                    "references": [],
+                },
+                {
+                    "spanID": "s2",
+                    "operationName": "db.query",
+                    "duration": 1500,
+                    "processID": "p1",
+                    "tags": [],
+                    "references": [{"refType": "CHILD_OF", "spanID": "s1"}],
+                },
+            ],
+            "processes": {"p1": {"serviceName": "order-service"}},
+        },
+    ]
+
+
+@responses.activate
+def test_span_statistics_happy_path() -> None:
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces",
+        json={"data": _make_stats_traces()},
+        status=200,
+    )
+    result = jaeger_span_statistics(service="order-service")
+    data = result.structuredContent
+    assert data["service"] == "order-service"
+    assert data["trace_count"] == 2
+    assert len(data["stats"]) == 2
+    # Sorted alphabetically: "GET /orders" first, "db.query" second
+    assert data["stats"][0]["operation"] == "GET /orders"
+    assert data["stats"][1]["operation"] == "db.query"
+    # GET /orders: count=2, durations [1000, 2000]
+    assert data["stats"][0]["count"] == 2
+
+
+@responses.activate
+def test_span_statistics_with_operation_filter() -> None:
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces",
+        json={"data": _make_stats_traces()},
+        status=200,
+    )
+    result = jaeger_span_statistics(service="order-service", operation="GET /orders")
+    data = result.structuredContent
+    assert data["operation"] == "GET /orders"
+    url = responses.calls[0].request.url
+    assert "operation=" in url
+
+
+@responses.activate
+def test_span_statistics_empty_traces() -> None:
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces",
+        json={"data": []},
+        status=200,
+    )
+    result = jaeger_span_statistics(service="order-service")
+    data = result.structuredContent
+    assert data["trace_count"] == 0
+    assert data["stats"] == []
+
+
+@responses.activate
+def test_span_statistics_with_errors() -> None:
+    traces = [
+        {
+            "traceID": "aaa111bbb222ccc333ddd444eee55566",
+            "spans": [
+                {
+                    "spanID": "s1",
+                    "operationName": "GET /orders",
+                    "duration": 1000,
+                    "processID": "p1",
+                    "tags": [{"key": "error", "value": "true", "type": "bool"}],
+                    "references": [],
+                },
+                {
+                    "spanID": "s2",
+                    "operationName": "GET /orders",
+                    "duration": 2000,
+                    "processID": "p1",
+                    "tags": [],
+                    "references": [],
+                },
+            ],
+            "processes": {"p1": {"serviceName": "order-service"}},
+        }
+    ]
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces",
+        json={"data": traces},
+        status=200,
+    )
+    result = jaeger_span_statistics(service="order-service")
+    data = result.structuredContent
+    stats = data["stats"]
+    assert len(stats) == 1
+    assert stats[0]["error_count"] == 1
+    assert isinstance(stats[0]["error_rate"], float)
+    assert stats[0]["error_rate"] > 0.0
+
+
+@responses.activate
+def test_span_statistics_limit_forwarded() -> None:
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces",
+        json={"data": []},
+        status=200,
+    )
+    jaeger_span_statistics(service="order-service", limit=50)
+    url = responses.calls[0].request.url
+    assert "limit=50" in url
+
+
+@responses.activate
+def test_span_statistics_default_limit() -> None:
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces",
+        json={"data": []},
+        status=200,
+    )
+    jaeger_span_statistics(service="order-service")
+    url = responses.calls[0].request.url
+    assert "limit=20" in url
+
+
+@responses.activate
+def test_span_statistics_401_raises_tool_error() -> None:
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces",
+        json={},
+        status=401,
+    )
+    with pytest.raises(ToolError, match="401"):
+        jaeger_span_statistics(service="order-service")

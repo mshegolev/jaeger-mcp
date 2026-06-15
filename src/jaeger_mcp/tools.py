@@ -1,6 +1,6 @@
 """MCP tools for Jaeger distributed tracing.
 
-6 read-only tools covering the Jaeger HTTP Query API surface most useful to
+7 read-only tools covering the Jaeger HTTP Query API surface most useful to
 an agent diagnosing latency, errors, or service topology:
 
 - ``jaeger_list_services``     — discover which services Jaeger has seen
@@ -9,6 +9,7 @@ an agent diagnosing latency, errors, or service topology:
 - ``jaeger_get_trace``         — retrieve full trace with span tree
 - ``jaeger_get_dependencies``  — service-to-service call graph
 - ``jaeger_compare_traces``    — structural diff between two traces
+- ``jaeger_span_statistics``   — per-operation latency and error stats
 
 **Threading model.** All tools are synchronous ``def``. FastMCP runs them
 in a worker thread via ``anyio.to_thread.run_sync``, so blocking HTTP
@@ -33,12 +34,14 @@ from jaeger_mcp.models import (
     ServicesOutput,
     ServiceSpanStats,
     SpanDetail,
+    SpanStatisticsOutput,
     TraceDetailOutput,
     TraceSummary,
 )
 from jaeger_mcp.shaping import (
     _LIST_CAP,
     _MD_ITEM_LIMIT,
+    aggregate_span_statistics as _aggregate_span_statistics,
     build_execution_tree as _build_execution_tree,
     compare_traces_diff as _compare_traces_diff,
     find_root_span as _find_root_span,
@@ -725,3 +728,127 @@ def jaeger_compare_traces(
         return output.ok(result, md)
     except Exception as exc:
         output.fail(exc, f"comparing traces {trace_id_a!r} vs {trace_id_b!r}")
+
+
+@mcp.tool(
+    name="jaeger_span_statistics",
+    annotations={
+        "title": "Span Statistics",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+    structured_output=True,
+)
+def jaeger_span_statistics(
+    service: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=500,
+            description=(
+                "Service name to compute statistics for (required). Use jaeger_list_services to discover valid names."
+            ),
+        ),
+    ],
+    operation: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=500,
+            description=(
+                "Operation name filter (optional). When set, only traces "
+                "matching this operation are fetched. Use jaeger_list_operations "
+                "to discover valid names."
+            ),
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(
+            default=20,
+            ge=1,
+            le=100,
+            description="Number of traces to fetch and analyze (1-100, default 20).",
+        ),
+    ] = 20,
+) -> SpanStatisticsOutput:
+    """Compute per-operation latency percentiles and error rates across recent traces.
+
+    Fetches up to ``limit`` traces for the given service (optionally filtered
+    by operation), then aggregates all spans by operation name. For each
+    operation reports: span count, p50/p95/p99 duration in microseconds,
+    error count, and error rate.
+
+    Duration values are in microseconds (integer). Error rate is
+    ``error_count / span_count`` (float, 0.0–1.0).
+
+    Examples:
+        - Use when: "What are the p95 latencies for each endpoint in `order-service`?"
+          → ``service='order-service'``; inspect each operation's ``p95_duration_us``.
+        - Use when: "How often does the `POST /checkout` endpoint error?"
+          → ``service='checkout-svc'``, ``operation='POST /checkout'``; check
+          ``error_rate`` in the stats.
+        - Use when: "Compare latency distributions across operations"
+          → look at p50 vs p99 spread to identify high-variance operations.
+        - Use when: "Get a larger sample for more accurate stats"
+          → ``limit=100`` for higher confidence percentiles.
+        - Don't use when: You want to compare two specific traces
+          (use ``jaeger_compare_traces`` instead).
+        - Don't use when: You want full span detail for a single trace
+          (use ``jaeger_get_trace`` instead).
+
+    Returns:
+        dict with ``service`` / ``operation`` / ``trace_count`` /
+        ``stats`` (list of per-operation stats with count, p50/p95/p99
+        duration_us, error_count, error_rate).
+    """
+    try:
+        client = get_client()
+        params: dict[str, Any] = {
+            "service": service,
+            "limit": limit,
+        }
+        if operation:
+            params["operation"] = operation
+
+        # Search for traces
+        search_data = client.get("/traces", params=params) or {}
+        raw_traces: list[dict[str, Any]] = search_data.get("data") or []
+
+        # Aggregate span statistics
+        stats = _aggregate_span_statistics(raw_traces)
+
+        result: SpanStatisticsOutput = {
+            "service": service,
+            "operation": operation,
+            "trace_count": len(raw_traces),
+            "stats": stats,
+        }
+
+        # Markdown summary
+        md = (
+            f"## Span Statistics for `{service}`"
+            + (f" / `{operation}`" if operation else "")
+            + f"\n\n**Traces analyzed:** {len(raw_traces)}"
+            + f" | **Operations:** {len(stats)}\n"
+        )
+        if stats:
+            md += "\n| Operation | Count | p50 (µs) | p95 (µs) | p99 (µs) | Errors | Error Rate |\n"
+            md += "|-----------|------:|--------:|---------:|---------:|-------:|-----------:|\n"
+            for s in stats[:_MD_ITEM_LIMIT]:
+                rate_pct = f"{s['error_rate']:.1%}"
+                md += (
+                    f"| `{s['operation']}` | {s['count']} "
+                    f"| {s['p50_duration_us']:,} | {s['p95_duration_us']:,} "
+                    f"| {s['p99_duration_us']:,} | {s['error_count']} | {rate_pct} |\n"
+                )
+            if len(stats) > _MD_ITEM_LIMIT:
+                md += _truncation_hint(len(stats), _MD_ITEM_LIMIT, "operations")
+        else:
+            md += "\n_No spans found in the analyzed traces._\n"
+
+        return output.ok(result, md)
+    except Exception as exc:
+        output.fail(exc, f"computing span statistics for service {service!r}")

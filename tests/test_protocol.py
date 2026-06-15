@@ -64,6 +64,13 @@ EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
         "required_params": {"trace_id_a", "trace_id_b"},
         "optional_params": set(),
     },
+    "jaeger_span_statistics": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "required_params": {"service"},
+        "optional_params": {"operation", "limit"},
+    },
 }
 
 
@@ -73,7 +80,7 @@ def listed_tools() -> list[Any]:
     return asyncio.run(mcp.list_tools())
 
 
-def test_all_six_tools_registered(listed_tools: list[Any]) -> None:
+def test_all_seven_tools_registered(listed_tools: list[Any]) -> None:
     names = {t.name for t in listed_tools}
     assert names == set(EXPECTED_TOOLS), (
         f"tool list mismatch.\n  registered: {sorted(names)}\n  expected:   {sorted(EXPECTED_TOOLS)}"
@@ -213,3 +220,13 @@ def test_list_operations_rejects_path_unsafe_service_names(listed_tools: list[An
     for good in ["order-service", "my.svc", "svc_v2", "host:8080"]:
         assert regex.fullmatch(good) is not None, f"pattern should accept {good!r}"
         ta.validate_python(good)  # must not raise
+
+
+def test_span_statistics_limit_constraints(listed_tools: list[Any]) -> None:
+    """limit should have ge=1 and le=100 constraints."""
+    tool = next(t for t in listed_tools if t.name == "jaeger_span_statistics")
+    props = tool.inputSchema["properties"]
+    limit_prop = props["limit"]
+    assert limit_prop.get("minimum", 0) >= 1
+    assert limit_prop.get("maximum", 999) <= 100
+    assert limit_prop.get("default") == 20
