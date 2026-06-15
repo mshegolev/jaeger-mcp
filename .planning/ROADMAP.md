@@ -44,7 +44,7 @@
 ### M5: Trace Analysis (Phases 8-10) — In Progress
 
 - [x] Phase 8: Trace Comparison — COMP-01, COMP-02, COMP-03, COMP-04
-- [ ] Phase 9: Span Statistics — STAT-01, STAT-02, STAT-03, STAT-04
+- [x] Phase 9: Span Statistics — STAT-01, STAT-02, STAT-03, STAT-04
 - [ ] Phase 10: Release v0.3.0 — REL-01, REL-02, REL-03
 
 #### Phase 8: Trace Comparison
@@ -80,9 +80,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — TypedDicts + percentile/aggregation logic in models.py and shaping.py
-- [ ] 09-02-PLAN.md — jaeger_span_statistics MCP tool + integration/protocol tests
-- [ ] 09-03-PLAN.md — JaegerClient.span_statistics() facade method + facade tests
+- [x] 09-01-PLAN.md — TypedDicts + percentile/aggregation logic in models.py and shaping.py
+- [x] 09-02-PLAN.md — jaeger_span_statistics MCP tool + integration/protocol tests
+- [x] 09-03-PLAN.md — JaegerClient.span_statistics() facade method + facade tests
 
 **Success criteria:**
 1. `jaeger_span_statistics` tool registered and discoverable via MCP
@@ -98,6 +98,11 @@ Plans:
 **Requirements:** REL-01, REL-02, REL-03
 
 **Depends on:** Phase 8 and Phase 9 (both tools must be complete)
+
+**Plans:** 1 plan
+
+Plans:
+- [ ] 10-01-PLAN.md — Version bump, CHANGELOG, README update, test verification
 
 **Success criteria:**
 1. `pyproject.toml` version is `0.3.0`
@@ -117,5 +122,5 @@ Plans:
 | 6. Code Quality | M4 | JGR-12..15 | Done | 2026-06-08 |
 | 7. Validation & Tests | M4 | JGR-16, JGR-17 | Done | 2026-06-08 |
 | 8. Trace Comparison | M5 | COMP-01..04 | Done | 2026-06-16 |
-| 9. Span Statistics | M5 | STAT-01..04 | Not started | - |
+| 9. Span Statistics | M5 | STAT-01..04 | Done | 2026-06-16 |
 | 10. Release v0.3.0 | M5 | REL-01..03 | Not started | - |
