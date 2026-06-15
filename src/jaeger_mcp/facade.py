@@ -30,6 +30,7 @@ from typing import Any
 
 from jaeger_mcp.client import JaegerHTTPClient
 from jaeger_mcp.shaping import (
+    compare_traces_diff as _compare_traces_diff,
     find_root_span as _find_root_span,
     shape_trace_summary as _raw_trace_summary,
     span_is_error as _span_is_error,
@@ -121,6 +122,51 @@ class ServiceDep:
     parent: str
     child: str
     call_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class SpanIdentity:
+    """Identifies a span by its structural position in the trace tree."""
+
+    operation_name: str
+    service: str
+    parent_operation: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SpanChange:
+    """A span that exists in both traces but differs in duration or tags."""
+
+    operation_name: str
+    service: str
+    parent_operation: str | None
+    duration_a_us: int
+    duration_b_us: int
+    duration_delta_us: int
+    tags_added: dict[str, str] = field(default_factory=dict)
+    tags_removed: dict[str, str] = field(default_factory=dict)
+    tags_changed: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class TraceComparison:
+    """Result of comparing two traces structurally.
+
+    Attributes:
+        trace_id_a: First (baseline) trace ID.
+        trace_id_b: Second (comparison) trace ID.
+        added_spans: Spans present in trace B but not in trace A.
+        removed_spans: Spans present in trace A but not in trace B.
+        changed_spans: Spans present in both but with different duration or tags.
+        unchanged_count: Number of spans identical in both traces.
+    """
+
+    trace_id_a: str
+    trace_id_b: str
+    added_spans: list[SpanIdentity]
+    removed_spans: list[SpanIdentity]
+    changed_spans: list[SpanChange]
+    unchanged_count: int
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -364,6 +410,76 @@ class JaegerClient:
         ]
         edges.sort(key=lambda e: e.call_count, reverse=True)
         return edges
+
+    def compare_traces(self, trace_id_a: str, trace_id_b: str) -> TraceComparison:
+        """Compare two traces structurally — find added, removed, and changed spans.
+
+        Matches spans by ``(operationName, serviceName, parentOperation)``
+        tuple, not by span ID. Reports duration deltas and tag differences.
+
+        Args:
+            trace_id_a: First (baseline) trace ID.
+            trace_id_b: Second (comparison) trace ID.
+
+        Returns:
+            A :class:`TraceComparison` with added, removed, changed spans
+            and unchanged count.
+
+        Raises:
+            ValueError: If either trace ID returns no data.
+            requests.HTTPError: On HTTP-level failures.
+        """
+        data_a = self._http.get(f"/traces/{trace_id_a}") or {}
+        traces_a: list[dict[str, Any]] = data_a.get("data") or []
+        if not traces_a:
+            raise ValueError(f"No trace data returned for trace_id_a {trace_id_a!r}.")
+
+        data_b = self._http.get(f"/traces/{trace_id_b}") or {}
+        traces_b: list[dict[str, Any]] = data_b.get("data") or []
+        if not traces_b:
+            raise ValueError(f"No trace data returned for trace_id_b {trace_id_b!r}.")
+
+        raw = _compare_traces_diff(traces_a[0], traces_b[0])
+
+        added = [
+            SpanIdentity(
+                operation_name=s["operation_name"],
+                service=s["service"],
+                parent_operation=s["parent_operation"],
+            )
+            for s in raw["added_spans"]
+        ]
+        removed = [
+            SpanIdentity(
+                operation_name=s["operation_name"],
+                service=s["service"],
+                parent_operation=s["parent_operation"],
+            )
+            for s in raw["removed_spans"]
+        ]
+        changed = [
+            SpanChange(
+                operation_name=c["operation_name"],
+                service=c["service"],
+                parent_operation=c["parent_operation"],
+                duration_a_us=c["duration_a_us"],
+                duration_b_us=c["duration_b_us"],
+                duration_delta_us=c["duration_delta_us"],
+                tags_added=c["tags_added"],
+                tags_removed=c["tags_removed"],
+                tags_changed=c["tags_changed"],
+            )
+            for c in raw["changed_spans"]
+        ]
+
+        return TraceComparison(
+            trace_id_a=raw["trace_id_a"],
+            trace_id_b=raw["trace_id_b"],
+            added_spans=added,
+            removed_spans=removed,
+            changed_spans=changed,
+            unchanged_count=raw["unchanged_count"],
+        )
 
     def close(self) -> None:
         """Close the underlying HTTP session."""

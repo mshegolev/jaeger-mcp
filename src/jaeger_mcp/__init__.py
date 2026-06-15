@@ -2,12 +2,24 @@
 
 __version__ = "0.2.0"
 
-from jaeger_mcp.facade import JaegerClient, ServiceDep, Span, Trace, TraceSummary
+from jaeger_mcp.facade import (
+    JaegerClient,
+    ServiceDep,
+    Span,
+    SpanChange,
+    SpanIdentity,
+    Trace,
+    TraceComparison,
+    TraceSummary,
+)
 
 __all__ = [
     "JaegerClient",
-    "Span",
-    "Trace",
-    "TraceSummary",
     "ServiceDep",
+    "Span",
+    "SpanChange",
+    "SpanIdentity",
+    "Trace",
+    "TraceComparison",
+    "TraceSummary",
 ]
