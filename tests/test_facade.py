@@ -18,7 +18,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jaeger_mcp import JaegerClient, ServiceDep, Span, SpanChange, SpanIdentity, Trace, TraceComparison, TraceSummary
+from jaeger_mcp import (
+    JaegerClient,
+    OperationStatResult,
+    ServiceDep,
+    Span,
+    SpanChange,
+    SpanIdentity,
+    SpanStatisticsResult,
+    Trace,
+    TraceComparison,
+    TraceSummary,
+)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -485,3 +496,158 @@ class TestCompareTraces:
             assert hasattr(c, "tags_added")
             assert hasattr(c, "tags_removed")
             assert hasattr(c, "tags_changed")
+
+
+# ── span_statistics ───────────────────────────────────────────────────────
+
+
+def _make_stats_response(
+    *,
+    traces: list[dict] | None = None,
+) -> dict:
+    """Build a mock Jaeger API response for span_statistics tests."""
+    if traces is None:
+        traces = [
+            {
+                "traceID": "t1",
+                "spans": [
+                    {
+                        "spanID": "s1",
+                        "operationName": "GET /orders",
+                        "processID": "p1",
+                        "duration": 1000,
+                        "references": [],
+                        "tags": [],
+                    },
+                    {
+                        "spanID": "s2",
+                        "operationName": "db.query",
+                        "processID": "p1",
+                        "duration": 500,
+                        "references": [{"refType": "CHILD_OF", "spanID": "s1"}],
+                        "tags": [],
+                    },
+                ],
+                "processes": {"p1": {"serviceName": "order-service"}},
+            },
+            {
+                "traceID": "t2",
+                "spans": [
+                    {
+                        "spanID": "s1",
+                        "operationName": "GET /orders",
+                        "processID": "p1",
+                        "duration": 2000,
+                        "references": [],
+                        "tags": [],
+                    },
+                    {
+                        "spanID": "s2",
+                        "operationName": "db.query",
+                        "processID": "p1",
+                        "duration": 1500,
+                        "references": [{"refType": "CHILD_OF", "spanID": "s1"}],
+                        "tags": [],
+                    },
+                ],
+                "processes": {"p1": {"serviceName": "order-service"}},
+            },
+        ]
+    return {"data": traces}
+
+
+class TestSpanStatistics:
+    """Tests for JaegerClient.span_statistics()."""
+
+    def test_span_statistics_happy_path(self) -> None:
+        mock_http = MagicMock()
+        mock_http.get.return_value = _make_stats_response()
+        client = JaegerClient(mock_http)
+        result = client.span_statistics("order-service")
+
+        assert isinstance(result, SpanStatisticsResult)
+        assert result.service == "order-service"
+        assert result.operation is None
+        assert result.trace_count == 2
+        assert len(result.stats) == 2
+        # Sorted alphabetically
+        assert result.stats[0].operation == "GET /orders"
+        assert result.stats[0].count == 2
+        assert result.stats[1].operation == "db.query"
+
+    def test_span_statistics_empty_traces(self) -> None:
+        mock_http = MagicMock()
+        mock_http.get.return_value = {"data": []}
+        client = JaegerClient(mock_http)
+        result = client.span_statistics("order-service")
+
+        assert result.trace_count == 0
+        assert result.stats == []
+
+    def test_span_statistics_operation_filter(self) -> None:
+        mock_http = MagicMock()
+        mock_http.get.return_value = _make_stats_response()
+        client = JaegerClient(mock_http)
+        result = client.span_statistics("order-service", operation="GET /orders")
+
+        assert result.operation == "GET /orders"
+        call_args = mock_http.get.call_args
+        params = call_args[1].get("params") or call_args[0][1] if len(call_args[0]) > 1 else call_args[1]["params"]
+        assert params["operation"] == "GET /orders"
+
+    def test_span_statistics_error_stats(self) -> None:
+        traces = [
+            {
+                "traceID": "t1",
+                "spans": [
+                    {
+                        "spanID": "s1",
+                        "operationName": "op",
+                        "processID": "p1",
+                        "duration": 100,
+                        "references": [],
+                        "tags": [{"key": "error", "value": "true", "type": "bool"}],
+                    },
+                    {
+                        "spanID": "s2",
+                        "operationName": "op",
+                        "processID": "p1",
+                        "duration": 200,
+                        "references": [],
+                        "tags": [],
+                    },
+                ],
+                "processes": {"p1": {"serviceName": "svc"}},
+            }
+        ]
+        mock_http = MagicMock()
+        mock_http.get.return_value = {"data": traces}
+        client = JaegerClient(mock_http)
+        result = client.span_statistics("svc")
+
+        assert len(result.stats) == 1
+        assert result.stats[0].error_count == 1
+        assert result.stats[0].error_rate == 0.5
+
+    def test_span_statistics_limit_clamped(self) -> None:
+        mock_http = MagicMock()
+        mock_http.get.return_value = {"data": []}
+        client = JaegerClient(mock_http)
+        client.span_statistics("svc", limit=200)
+
+        call_args = mock_http.get.call_args
+        params = call_args[1].get("params") or call_args[0][1] if len(call_args[0]) > 1 else call_args[1]["params"]
+        assert params["limit"] == 100
+
+    def test_span_statistics_return_types(self) -> None:
+        mock_http = MagicMock()
+        mock_http.get.return_value = _make_stats_response()
+        client = JaegerClient(mock_http)
+        result = client.span_statistics("order-service")
+
+        assert isinstance(result, SpanStatisticsResult)
+        for stat in result.stats:
+            assert isinstance(stat, OperationStatResult)
+        # Verify frozen
+        with pytest.raises(AttributeError):
+            result.service = "changed"  # type: ignore[misc]

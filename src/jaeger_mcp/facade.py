@@ -30,6 +30,7 @@ from typing import Any
 
 from jaeger_mcp.client import JaegerHTTPClient
 from jaeger_mcp.shaping import (
+    aggregate_span_statistics as _aggregate_span_statistics,
     compare_traces_diff as _compare_traces_diff,
     find_root_span as _find_root_span,
     shape_trace_summary as _raw_trace_summary,
@@ -167,6 +168,46 @@ class TraceComparison:
     removed_spans: list[SpanIdentity]
     changed_spans: list[SpanChange]
     unchanged_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class OperationStatResult:
+    """Per-operation latency and error statistics.
+
+    Attributes:
+        operation: Operation name.
+        count: Total number of spans with this operation.
+        p50_duration_us: 50th percentile duration (microseconds).
+        p95_duration_us: 95th percentile duration (microseconds).
+        p99_duration_us: 99th percentile duration (microseconds).
+        error_count: Number of error spans.
+        error_rate: Error count divided by total count (0.0–1.0).
+    """
+
+    operation: str
+    count: int
+    p50_duration_us: int
+    p95_duration_us: int
+    p99_duration_us: int
+    error_count: int
+    error_rate: float
+
+
+@dataclass(frozen=True, slots=True)
+class SpanStatisticsResult:
+    """Result of computing span statistics across traces.
+
+    Attributes:
+        service: The service that was queried.
+        operation: The operation filter used (None if not filtered).
+        trace_count: Number of traces fetched and analyzed.
+        stats: Per-operation statistics, sorted alphabetically.
+    """
+
+    service: str
+    operation: str | None
+    trace_count: int
+    stats: list[OperationStatResult]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -479,6 +520,57 @@ class JaegerClient:
             removed_spans=removed,
             changed_spans=changed,
             unchanged_count=raw["unchanged_count"],
+        )
+
+    def span_statistics(
+        self,
+        service: str,
+        *,
+        operation: str | None = None,
+        limit: int = 20,
+    ) -> SpanStatisticsResult:
+        """Compute per-operation latency percentiles and error rates.
+
+        Fetches up to ``limit`` traces for the given service, then
+        aggregates all spans by operation name. For each operation
+        reports p50/p95/p99 duration, error count, and error rate.
+
+        Args:
+            service: Service name (required).
+            operation: Operation name filter (optional).
+            limit: Number of traces to fetch (default 20, max 100).
+
+        Returns:
+            A :class:`SpanStatisticsResult` with per-operation stats.
+        """
+        limit = min(max(limit, 1), 100)
+        params: dict[str, Any] = {"service": service, "limit": limit}
+        if operation:
+            params["operation"] = operation
+
+        data = self._http.get("/traces", params=params) or {}
+        raw_traces: list[dict[str, Any]] = data.get("data") or []
+
+        raw_stats = _aggregate_span_statistics(raw_traces)
+
+        stats = [
+            OperationStatResult(
+                operation=s["operation"],
+                count=s["count"],
+                p50_duration_us=s["p50_duration_us"],
+                p95_duration_us=s["p95_duration_us"],
+                p99_duration_us=s["p99_duration_us"],
+                error_count=s["error_count"],
+                error_rate=s["error_rate"],
+            )
+            for s in raw_stats
+        ]
+
+        return SpanStatisticsResult(
+            service=service,
+            operation=operation,
+            trace_count=len(raw_traces),
+            stats=stats,
         )
 
     def close(self) -> None:
