@@ -8,14 +8,14 @@
 [![Tests](https://github.com/mshegolev/jaeger-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/mshegolev/jaeger-mcp/actions/workflows/test.yml)
 
 **MCP server for [Jaeger](https://www.jaegertracing.io/) distributed tracing.**
-Give Claude (or any MCP-capable agent) read access to your trace data — search traces, inspect spans, map service dependencies — without leaving the conversation.
+Give Claude (or any MCP-capable agent) read access to your trace data — search traces, inspect spans, compare traces, compute span statistics, map service dependencies — without leaving the conversation.
 
 ## Why another Jaeger MCP?
 
 The existing Jaeger integrations require a running UI or custom scripts. This server:
 
 - Speaks the standard [Model Context Protocol](https://modelcontextprotocol.io/) over **stdio** — works with Claude Desktop, Claude Code, Cursor, and any MCP client.
-- Is **read-only**: all 5 tools carry `readOnlyHint: true` — zero risk of modifying trace data.
+- Is **read-only**: all 7 tools carry `readOnlyHint: true` — zero risk of modifying trace data.
 - Returns **dual-channel output**: structured JSON (`structuredContent`) for programmatic use + Markdown (`content`) for human-readable display.
 - Has **actionable error messages** that name the exact env var to fix and suggest a next step.
 - Supports **Bearer token**, **HTTP Basic auth**, or **no auth** (common for internal deployments).
@@ -29,6 +29,8 @@ The existing Jaeger integrations require a running UI or custom scripts. This se
 | `jaeger_search_traces` | `GET /api/traces` | Search traces with rich filters |
 | `jaeger_get_trace` | `GET /api/traces/{traceID}` | Full trace detail with span tree |
 | `jaeger_get_dependencies` | `GET /api/dependencies` | Service-to-service call graph |
+| `jaeger_compare_traces` | `GET /api/traces/{traceID}` ×2 | Structural diff between two traces |
+| `jaeger_span_statistics` | `GET /api/traces` | Per-operation latency and error stats |
 
 ## Installation
 
@@ -109,6 +111,8 @@ Once configured, ask Claude:
 - "What caused the error in trace `abcdef1234567890`?"
 - "Map the service dependency graph for the last 7 days"
 - "Which services call `postgres` most frequently?"
+- "Compare trace `abc123` against trace `def456` — what spans changed?"
+- "What are the p95 latencies per operation in `order-service`?"
 
 ## Tool usage guide
 
@@ -147,6 +151,27 @@ Error spans are identified by `tags["error"] = "true"`.
 
 Service topology graph. Returns directed edges `(parent → child)` with `call_count`. Use `lookback_hours` (default 24, max 720) to control the window.
 
+### `jaeger_compare_traces`
+
+Structural diff between two traces. Accepts two `trace_id` hex strings and matches spans by `(operationName, serviceName, parentOperation)` — not span ID. Reports:
+
+- **Added spans** — present in trace B but not trace A
+- **Removed spans** — present in trace A but not trace B
+- **Changed spans** — matched but differ in duration or tags (shows deltas)
+- **Unchanged count** — number of identical spans
+
+Use to compare a slow trace against a fast one, or to see what changed between deployments.
+
+### `jaeger_span_statistics`
+
+Per-operation latency percentiles and error rates. Fetches up to `limit` traces (default 20, max 100) for a service and aggregates all spans by operation name. Reports per operation:
+
+- `count` — total spans observed
+- `p50_duration_us`, `p95_duration_us`, `p99_duration_us` — latency percentiles
+- `error_count`, `error_rate` — errors (identified by `tags["error"] = "true"`)
+
+Use to find the slowest or most error-prone operations in a service.
+
 ## Library facade (in-process use)
 
 `jaeger-mcp` can also be used as a Python library without an MCP server:
@@ -163,9 +188,9 @@ for span in trace.spans:
         print(f"  tags: {span.tags}")
 ```
 
-Available methods: `get_trace()`, `search_traces()`, `list_services()`, `get_dependencies()`.
+Available methods: `get_trace()`, `search_traces()`, `list_services()`, `get_dependencies()`, `compare_traces()`, `span_statistics()`.
 
-Domain objects: `Span`, `Trace`, `TraceSummary`, `ServiceDep` — all with typed fields.
+Domain objects: `Span`, `Trace`, `TraceSummary`, `ServiceDep`, `TraceComparison`, `SpanIdentity`, `SpanChange`, `SpanStatisticsResult`, `OperationStatResult` — all with typed fields.
 
 ## Performance characteristics
 
