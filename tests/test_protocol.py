@@ -57,6 +57,13 @@ EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
         "required_params": set(),
         "optional_params": {"end_ts", "lookback_hours"},
     },
+    "jaeger_compare_traces": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "required_params": {"trace_id_a", "trace_id_b"},
+        "optional_params": set(),
+    },
 }
 
 
@@ -66,7 +73,7 @@ def listed_tools() -> list[Any]:
     return asyncio.run(mcp.list_tools())
 
 
-def test_all_five_tools_registered(listed_tools: list[Any]) -> None:
+def test_all_six_tools_registered(listed_tools: list[Any]) -> None:
     names = {t.name for t in listed_tools}
     assert names == set(EXPECTED_TOOLS), (
         f"tool list mismatch.\n  registered: {sorted(names)}\n  expected:   {sorted(EXPECTED_TOOLS)}"
@@ -138,6 +145,17 @@ def test_get_trace_trace_id_constraints(listed_tools: list[Any]) -> None:
     assert "trace_id" in props
     # minLength=16 and maxLength=32 come from Annotated[str, Field(min_length=16, max_length=32)]
     assert props["trace_id"].get("minLength", 0) >= 1
+
+
+def test_compare_traces_trace_id_constraints(listed_tools: list[Any]) -> None:
+    """trace_id_a and trace_id_b should have hex pattern and length constraints."""
+    tool = next(t for t in listed_tools if t.name == "jaeger_compare_traces")
+    props = tool.inputSchema["properties"]
+    for param in ("trace_id_a", "trace_id_b"):
+        assert param in props
+        assert props[param].get("minLength", 0) >= 16
+        assert props[param].get("maxLength", 999) <= 32
+        assert props[param].get("pattern") is not None
 
 
 def test_get_dependencies_lookback_documented(listed_tools: list[Any]) -> None:

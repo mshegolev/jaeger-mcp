@@ -18,6 +18,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from jaeger_mcp import _mcp
 from jaeger_mcp.tools import (
+    jaeger_compare_traces,
     jaeger_get_dependencies,
     jaeger_get_trace,
     jaeger_list_operations,
@@ -556,3 +557,159 @@ def test_get_dependencies_markdown_truncation_hint() -> None:
     result = jaeger_get_dependencies()
     md = result.content[0].text
     assert "Showing first 20 of 25" in md
+
+
+# ── jaeger_compare_traces ─────────────────────────────────────────────────
+
+
+TRACE_ID_A = "aaa111bbb222ccc333ddd444eee55566"
+TRACE_ID_B = "fff666eee555ddd444ccc333bbb22211"
+
+
+def _make_compare_trace(
+    trace_id: str,
+    *,
+    child_duration: int = 200_000,
+    child_operation: str = "db.query",
+    child_service_name: str = "db-service",
+    root_operation: str = "GET /orders",
+    root_service_name: str = "order-service",
+    child_tags: list[dict] | None = None,
+) -> dict:
+    """Build a Jaeger trace dict for comparison tests."""
+    return {
+        "traceID": trace_id,
+        "spans": [
+            {
+                "spanID": "s1",
+                "operationName": root_operation,
+                "processID": "p1",
+                "startTime": 1_700_000_000_000_000,
+                "duration": 500_000,
+                "references": [],
+                "tags": [],
+            },
+            {
+                "spanID": "s2",
+                "operationName": child_operation,
+                "processID": "p2",
+                "startTime": 1_700_000_000_100_000,
+                "duration": child_duration,
+                "references": [{"refType": "CHILD_OF", "spanID": "s1"}],
+                "tags": child_tags or [],
+            },
+        ],
+        "processes": {
+            "p1": {"serviceName": root_service_name},
+            "p2": {"serviceName": child_service_name},
+        },
+    }
+
+
+@responses.activate
+def test_compare_traces_happy_path() -> None:
+    trace_a = _make_compare_trace(TRACE_ID_A, child_duration=200_000)
+    trace_b = _make_compare_trace(TRACE_ID_B, child_duration=300_000)
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces/{TRACE_ID_A}",
+        json={"data": [trace_a]},
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces/{TRACE_ID_B}",
+        json={"data": [trace_b]},
+        status=200,
+    )
+    result = jaeger_compare_traces(trace_id_a=TRACE_ID_A, trace_id_b=TRACE_ID_B)
+    data = result.structuredContent
+    assert data["trace_id_a"] == TRACE_ID_A
+    assert data["trace_id_b"] == TRACE_ID_B
+    assert data["unchanged_count"] == 1  # root span unchanged
+    assert len(data["changed_spans"]) == 1
+    assert data["changed_spans"][0]["duration_delta_us"] == 100_000
+
+
+@responses.activate
+def test_compare_traces_identical() -> None:
+    trace = _make_compare_trace(TRACE_ID_A)
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces/{TRACE_ID_A}",
+        json={"data": [trace]},
+        status=200,
+    )
+    # Use same trace data for B (different trace ID in URL but same content)
+    trace_b = _make_compare_trace(TRACE_ID_B)
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces/{TRACE_ID_B}",
+        json={"data": [trace_b]},
+        status=200,
+    )
+    result = jaeger_compare_traces(trace_id_a=TRACE_ID_A, trace_id_b=TRACE_ID_B)
+    data = result.structuredContent
+    assert data["unchanged_count"] == 2
+    assert data["added_spans"] == []
+    assert data["removed_spans"] == []
+    assert data["changed_spans"] == []
+
+
+@responses.activate
+def test_compare_traces_empty_trace_a() -> None:
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces/{TRACE_ID_A}",
+        json={"data": []},
+        status=200,
+    )
+    with pytest.raises(ToolError, match="trace_id_a"):
+        jaeger_compare_traces(trace_id_a=TRACE_ID_A, trace_id_b=TRACE_ID_B)
+
+
+@responses.activate
+def test_compare_traces_fully_different() -> None:
+    trace_a = _make_compare_trace(
+        TRACE_ID_A,
+        root_operation="GET /orders",
+        root_service_name="order-service",
+        child_operation="db.query",
+        child_service_name="db-service",
+    )
+    # Completely different services and operations
+    trace_b_data = {
+        "traceID": TRACE_ID_B,
+        "spans": [
+            {
+                "spanID": "s1",
+                "operationName": "POST /payments",
+                "processID": "p1",
+                "startTime": 1_700_000_000_000_000,
+                "duration": 400_000,
+                "references": [],
+                "tags": [],
+            },
+        ],
+        "processes": {
+            "p1": {"serviceName": "payment-service"},
+        },
+    }
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces/{TRACE_ID_A}",
+        json={"data": [trace_a]},
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"{BASE}/api/traces/{TRACE_ID_B}",
+        json={"data": [trace_b_data]},
+        status=200,
+    )
+    result = jaeger_compare_traces(trace_id_a=TRACE_ID_A, trace_id_b=TRACE_ID_B)
+    data = result.structuredContent
+    assert len(data["removed_spans"]) == 2  # A's two spans
+    assert len(data["added_spans"]) == 1  # B's one span
+    assert data["unchanged_count"] == 0
+    assert data["changed_spans"] == []
