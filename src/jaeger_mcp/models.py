@@ -157,3 +157,23 @@ class CompareTracesOutput(TypedDict):
     removed_spans: list[MatchedSpanSummary]
     changed_spans: list[ChangedSpan]
     unchanged_count: int
+
+
+# ── Span statistics ──────────────────────────────────────────────────────
+
+
+class OperationStats(TypedDict):
+    operation: str
+    count: int
+    p50_duration_us: int
+    p95_duration_us: int
+    p99_duration_us: int
+    error_count: int
+    error_rate: float
+
+
+class SpanStatisticsOutput(TypedDict):
+    service: str
+    operation: str | None
+    trace_count: int
+    stats: list[OperationStats]

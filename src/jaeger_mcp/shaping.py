@@ -15,6 +15,7 @@ from jaeger_mcp.models import (
     CompareTracesOutput,
     ExecutionNode,
     MatchedSpanSummary,
+    OperationStats,
     SpanDetail,
     TraceSummary,
 )
@@ -293,6 +294,73 @@ def compare_traces_diff(
     }
 
 
+# ── Span statistics ───────────────────────────────────────────────────────
+
+
+def compute_percentile(sorted_values: list[int], percentile: float) -> int:
+    """Compute a percentile using linear interpolation.
+
+    Args:
+        sorted_values: Pre-sorted list of integer values (ascending).
+        percentile: Percentile to compute (0-100).
+
+    Returns:
+        Interpolated percentile value as int.
+    """
+    if not sorted_values:
+        return 0
+    n = len(sorted_values)
+    if n == 1:
+        return sorted_values[0]
+    # Linear interpolation (matches numpy default)
+    rank = (percentile / 100.0) * (n - 1)
+    low = int(rank)
+    high = min(low + 1, n - 1)
+    frac = rank - low
+    return int(sorted_values[low] + frac * (sorted_values[high] - sorted_values[low]))
+
+
+def aggregate_span_statistics(traces: list[dict[str, Any]]) -> list[OperationStats]:
+    """Aggregate per-operation latency and error stats across traces.
+
+    Args:
+        traces: List of raw Jaeger trace dicts (each containing 'spans').
+
+    Returns:
+        List of :class:`OperationStats`, one per distinct operation,
+        sorted alphabetically by operation name.
+    """
+    # Collect durations and error flags per operation
+    ops: dict[str, dict[str, Any]] = {}
+    for trace in traces:
+        for span in trace.get("spans") or []:
+            op = span.get("operationName", "")
+            if op not in ops:
+                ops[op] = {"durations": [], "error_count": 0}
+            ops[op]["durations"].append(span.get("duration", 0))
+            if span_is_error(span):
+                ops[op]["error_count"] += 1
+
+    stats: list[OperationStats] = []
+    for op in sorted(ops):
+        data = ops[op]
+        durations = sorted(data["durations"])
+        count = len(durations)
+        error_count = data["error_count"]
+        stats.append(
+            {
+                "operation": op,
+                "count": count,
+                "p50_duration_us": compute_percentile(durations, 50),
+                "p95_duration_us": compute_percentile(durations, 95),
+                "p99_duration_us": compute_percentile(durations, 99),
+                "error_count": error_count,
+                "error_rate": error_count / count if count else 0.0,
+            }
+        )
+    return stats
+
+
 # ── Backward-compatible aliases (underscore-prefixed) ─────────────────
 # These allow existing imports from tools.py and facade.py to keep working
 # during transition. Prefer the public names above for new code.
@@ -306,3 +374,5 @@ _shape_trace_summary = shape_trace_summary
 _shape_span_detail = shape_span_detail
 _span_match_key = span_match_key
 _compare_traces_diff = compare_traces_diff
+_compute_percentile = compute_percentile
+_aggregate_span_statistics = aggregate_span_statistics

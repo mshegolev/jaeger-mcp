@@ -8,8 +8,10 @@ them directly without mocking any HTTP client.
 from __future__ import annotations
 
 from jaeger_mcp.shaping import (
+    aggregate_span_statistics as _aggregate_span_statistics,
     build_execution_tree as _build_execution_tree,
     compare_traces_diff as _compare_traces_diff,
+    compute_percentile as _compute_percentile,
     find_root_span as _find_root_span,
     shape_span_detail as _shape_span_detail,
     shape_trace_summary as _shape_trace_summary,
@@ -504,3 +506,126 @@ class TestCompareTracesDiff:
         assert result["unchanged_count"] == 1
         assert len(result["removed_spans"]) == 2
         assert result["added_spans"] == []
+
+
+# ── compute_percentile tests ─────────────────────────────────────────────
+
+
+class TestComputePercentile:
+    def test_median_odd_count(self) -> None:
+        assert _compute_percentile([100, 200, 300, 400, 500], 50) == 300
+
+    def test_p95_linear_interpolation(self) -> None:
+        assert _compute_percentile([100, 200, 300, 400, 500], 95) == 480
+
+    def test_p99_linear_interpolation(self) -> None:
+        assert _compute_percentile([100, 200, 300, 400, 500], 99) == 496
+
+    def test_empty_list_returns_zero(self) -> None:
+        assert _compute_percentile([], 50) == 0
+
+    def test_single_element(self) -> None:
+        assert _compute_percentile([42], 99) == 42
+
+    def test_two_elements_p50(self) -> None:
+        assert _compute_percentile([100, 200], 50) == 150
+
+    def test_p0_returns_minimum(self) -> None:
+        assert _compute_percentile([10, 20, 30], 0) == 10
+
+    def test_p100_returns_maximum(self) -> None:
+        assert _compute_percentile([10, 20, 30], 100) == 30
+
+
+# ── aggregate_span_statistics tests ──────────────────────────────────────
+
+
+class TestAggregateSpanStatistics:
+    def test_empty_traces_returns_empty(self) -> None:
+        assert _aggregate_span_statistics([]) == []
+
+    def test_traces_with_no_spans_returns_empty(self) -> None:
+        assert _aggregate_span_statistics([{"spans": []}]) == []
+
+    def test_single_operation_stats(self) -> None:
+        traces = [
+            {
+                "spans": [
+                    {"operationName": "GET /orders", "duration": 100, "tags": []},
+                    {"operationName": "GET /orders", "duration": 200, "tags": []},
+                    {"operationName": "GET /orders", "duration": 300, "tags": []},
+                ]
+            }
+        ]
+        stats = _aggregate_span_statistics(traces)
+        assert len(stats) == 1
+        s = stats[0]
+        assert s["operation"] == "GET /orders"
+        assert s["count"] == 3
+        assert s["p50_duration_us"] == 200
+        assert s["error_count"] == 0
+        assert s["error_rate"] == 0.0
+
+    def test_multiple_operations_sorted(self) -> None:
+        traces = [
+            {
+                "spans": [
+                    {"operationName": "POST /b", "duration": 1000, "tags": []},
+                    {"operationName": "GET /a", "duration": 500, "tags": []},
+                ]
+            }
+        ]
+        stats = _aggregate_span_statistics(traces)
+        assert len(stats) == 2
+        assert stats[0]["operation"] == "GET /a"
+        assert stats[1]["operation"] == "POST /b"
+
+    def test_error_count_and_rate(self) -> None:
+        traces = [
+            {
+                "spans": [
+                    {"operationName": "op", "duration": 100, "tags": []},
+                    {
+                        "operationName": "op",
+                        "duration": 200,
+                        "tags": [{"key": "error", "value": "true", "type": "bool"}],
+                    },
+                    {"operationName": "op", "duration": 300, "tags": []},
+                    {"operationName": "op", "duration": 400, "tags": []},
+                ]
+            }
+        ]
+        stats = _aggregate_span_statistics(traces)
+        assert len(stats) == 1
+        s = stats[0]
+        assert s["error_count"] == 1
+        assert s["error_rate"] == 0.25
+
+    def test_spans_across_multiple_traces(self) -> None:
+        traces = [
+            {
+                "spans": [
+                    {"operationName": "op", "duration": 100, "tags": []},
+                ]
+            },
+            {
+                "spans": [
+                    {"operationName": "op", "duration": 200, "tags": []},
+                ]
+            },
+        ]
+        stats = _aggregate_span_statistics(traces)
+        assert len(stats) == 1
+        assert stats[0]["count"] == 2
+
+    def test_duration_in_microseconds(self) -> None:
+        traces = [
+            {
+                "spans": [
+                    {"operationName": "op", "duration": 123456, "tags": []},
+                ]
+            }
+        ]
+        stats = _aggregate_span_statistics(traces)
+        assert stats[0]["p50_duration_us"] == 123456
+        assert isinstance(stats[0]["p50_duration_us"], int)
