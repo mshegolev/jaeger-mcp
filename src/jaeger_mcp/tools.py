@@ -1,6 +1,6 @@
 """MCP tools for Jaeger distributed tracing.
 
-5 read-only tools covering the Jaeger HTTP Query API surface most useful to
+6 read-only tools covering the Jaeger HTTP Query API surface most useful to
 an agent diagnosing latency, errors, or service topology:
 
 - ``jaeger_list_services``     — discover which services Jaeger has seen
@@ -8,6 +8,7 @@ an agent diagnosing latency, errors, or service topology:
 - ``jaeger_search_traces``     — search traces with rich filters
 - ``jaeger_get_trace``         — retrieve full trace with span tree
 - ``jaeger_get_dependencies``  — service-to-service call graph
+- ``jaeger_compare_traces``    — structural diff between two traces
 
 **Threading model.** All tools are synchronous ``def``. FastMCP runs them
 in a worker thread via ``anyio.to_thread.run_sync``, so blocking HTTP
@@ -24,6 +25,7 @@ from pydantic import Field
 from jaeger_mcp import output
 from jaeger_mcp._mcp import get_client, mcp
 from jaeger_mcp.models import (
+    CompareTracesOutput,
     DependenciesOutput,
     DependencyEdge,
     OperationsOutput,
@@ -38,6 +40,7 @@ from jaeger_mcp.shaping import (
     _LIST_CAP,
     _MD_ITEM_LIMIT,
     build_execution_tree as _build_execution_tree,
+    compare_traces_diff as _compare_traces_diff,
     find_root_span as _find_root_span,
     shape_span_detail as _shape_span_detail,
     shape_trace_summary as _shape_trace_summary,
@@ -595,3 +598,130 @@ def jaeger_get_dependencies(
         return output.ok(result, md)
     except Exception as exc:
         output.fail(exc, "fetching Jaeger service dependencies")
+
+
+@mcp.tool(
+    name="jaeger_compare_traces",
+    annotations={
+        "title": "Compare Traces",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+    structured_output=True,
+)
+def jaeger_compare_traces(
+    trace_id_a: Annotated[
+        str,
+        Field(
+            min_length=16,
+            max_length=32,
+            pattern=r"^[0-9a-fA-F]+$",
+            description=(
+                "First trace ID (baseline) as a hex string (16 or 32 hex chars). Obtain from jaeger_search_traces."
+            ),
+        ),
+    ],
+    trace_id_b: Annotated[
+        str,
+        Field(
+            min_length=16,
+            max_length=32,
+            pattern=r"^[0-9a-fA-F]+$",
+            description=(
+                "Second trace ID (comparison) as a hex string (16 or 32 hex chars). Obtain from jaeger_search_traces."
+            ),
+        ),
+    ],
+) -> CompareTracesOutput:
+    """Compare two traces structurally — find added, removed, and changed spans.
+
+    Fetches both traces from Jaeger and performs a structural diff by matching
+    spans on ``(operationName, serviceName, parentOperation)`` — not span IDs,
+    which differ across traces. Reports duration deltas and tag differences for
+    changed spans.
+
+    Examples:
+        - Use when: "What changed between a fast and slow request?"
+          → pass the trace IDs of both requests; inspect ``changed_spans``
+          for duration deltas.
+        - Use when: "Did a deployment add new service calls?"
+          → compare a pre-deploy trace with a post-deploy trace; check
+          ``added_spans`` for new operations.
+        - Use when: "Are these two traces structurally identical?"
+          → if ``added_spans``, ``removed_spans``, and ``changed_spans``
+          are all empty, the traces have the same structure.
+        - Don't use when: You want aggregate statistics across many traces
+          (use ``jaeger_span_statistics`` instead, once available).
+        - Don't use when: You only have one trace — use ``jaeger_get_trace``
+          for single-trace inspection.
+
+    Returns:
+        dict with ``trace_id_a`` / ``trace_id_b`` / ``added_spans`` /
+        ``removed_spans`` / ``changed_spans`` (with duration + tag deltas) /
+        ``unchanged_count``.
+    """
+    try:
+        client = get_client()
+
+        data_a = client.get(f"/traces/{trace_id_a}") or {}
+        traces_a: list[dict[str, Any]] = data_a.get("data") or []
+        if not traces_a:
+            raise ValueError(
+                f"No trace data returned for trace_id_a {trace_id_a!r}. "
+                "Verify the trace ID is correct (obtain from jaeger_search_traces)."
+            )
+
+        data_b = client.get(f"/traces/{trace_id_b}") or {}
+        traces_b: list[dict[str, Any]] = data_b.get("data") or []
+        if not traces_b:
+            raise ValueError(
+                f"No trace data returned for trace_id_b {trace_id_b!r}. "
+                "Verify the trace ID is correct (obtain from jaeger_search_traces)."
+            )
+
+        result = _compare_traces_diff(traces_a[0], traces_b[0])
+
+        # Markdown summary
+        added = result["added_spans"]
+        removed = result["removed_spans"]
+        changed = result["changed_spans"]
+        unchanged = result["unchanged_count"]
+        total = len(added) + len(removed) + len(changed) + unchanged
+
+        md = (
+            f"## Trace Comparison\n\n"
+            f"- **Trace A:** `{result['trace_id_a']}`\n"
+            f"- **Trace B:** `{result['trace_id_b']}`\n"
+            f"- **Total span keys:** {total}\n"
+            f"- **Unchanged:** {unchanged} | "
+            f"**Added:** {len(added)} | "
+            f"**Removed:** {len(removed)} | "
+            f"**Changed:** {len(changed)}\n"
+        )
+
+        if added:
+            md += "\n### Added Spans (in B, not in A)\n\n"
+            for s in added:
+                md += f"- `{s['service']}` / `{s['operation_name']}`\n"
+
+        if removed:
+            md += "\n### Removed Spans (in A, not in B)\n\n"
+            for s in removed:
+                md += f"- `{s['service']}` / `{s['operation_name']}`\n"
+
+        if changed:
+            md += "\n### Changed Spans\n\n"
+            for c in changed:
+                delta = c["duration_delta_us"]
+                sign = "+" if delta > 0 else ""
+                md += f"- `{c['service']}` / `{c['operation_name']}` — {sign}{delta}µs"
+                tag_changes = len(c["tags_added"]) + len(c["tags_removed"]) + len(c["tags_changed"])
+                if tag_changes:
+                    md += f" ({tag_changes} tag change(s))"
+                md += "\n"
+
+        return output.ok(result, md)
+    except Exception as exc:
+        output.fail(exc, f"comparing traces {trace_id_a!r} vs {trace_id_b!r}")
