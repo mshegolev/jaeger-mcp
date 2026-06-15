@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from jaeger_mcp.shaping import (
     build_execution_tree as _build_execution_tree,
+    compare_traces_diff as _compare_traces_diff,
     find_root_span as _find_root_span,
     shape_span_detail as _shape_span_detail,
     shape_trace_summary as _shape_trace_summary,
     span_is_error as _span_is_error,
+    span_match_key as _span_match_key,
     span_tags_flat as _span_tags_flat,
     truncation_hint as _truncation_hint,
 )
@@ -245,3 +247,260 @@ class TestTruncationHint:
         assert "100" in hint
         assert "services" in hint
         assert "structured content" in hint
+
+
+# ── span_match_key tests ─────────────────────────────────────────────────
+
+
+def _make_span(
+    span_id: str,
+    operation: str,
+    process_id: str,
+    *,
+    parent_span_id: str | None = None,
+    duration: int = 100_000,
+    tags: list[dict] | None = None,
+) -> dict:
+    """Build a raw Jaeger span dict for testing."""
+    refs = []
+    if parent_span_id:
+        refs.append({"refType": "CHILD_OF", "spanID": parent_span_id})
+    return {
+        "spanID": span_id,
+        "operationName": operation,
+        "processID": process_id,
+        "startTime": 1_700_000_000_000_000,
+        "duration": duration,
+        "references": refs,
+        "tags": tags or [],
+    }
+
+
+def _make_raw_trace(
+    trace_id: str,
+    spans: list[dict],
+    processes: dict,
+) -> dict:
+    """Build a raw Jaeger trace dict."""
+    return {
+        "traceID": trace_id,
+        "spans": spans,
+        "processes": processes,
+    }
+
+
+class TestSpanMatchKey:
+    def test_span_match_key_root_span(self) -> None:
+        """Root span has parentOperation=None."""
+        span = _make_span("s1", "GET /orders", "p1")
+        processes = {"p1": {"serviceName": "order-service"}}
+        span_map = {"s1": span}
+        key = _span_match_key(span, processes, span_map)
+        assert key == ("GET /orders", "order-service", None)
+
+    def test_span_match_key_child_span(self) -> None:
+        """Child span has parentOperation = parent's operationName."""
+        root = _make_span("s1", "GET /orders", "p1")
+        child = _make_span("s2", "db.query", "p2", parent_span_id="s1")
+        processes = {
+            "p1": {"serviceName": "order-service"},
+            "p2": {"serviceName": "db-service"},
+        }
+        span_map = {"s1": root, "s2": child}
+        key = _span_match_key(child, processes, span_map)
+        assert key == ("db.query", "db-service", "GET /orders")
+
+
+class TestCompareTracesDiff:
+    def test_compare_traces_diff_identical(self) -> None:
+        """Identical traces → 0 added, 0 removed, 0 changed, N unchanged."""
+        spans = [
+            _make_span("s1", "GET /orders", "p1"),
+            _make_span("s2", "db.query", "p2", parent_span_id="s1"),
+        ]
+        processes = {
+            "p1": {"serviceName": "order-service"},
+            "p2": {"serviceName": "db-service"},
+        }
+        trace_a = _make_raw_trace("aaa", spans, processes)
+        trace_b = _make_raw_trace("bbb", spans, processes)
+        result = _compare_traces_diff(trace_a, trace_b)
+        assert result["trace_id_a"] == "aaa"
+        assert result["trace_id_b"] == "bbb"
+        assert result["added_spans"] == []
+        assert result["removed_spans"] == []
+        assert result["changed_spans"] == []
+        assert result["unchanged_count"] == 2
+
+    def test_compare_traces_diff_completely_different(self) -> None:
+        """Completely different traces → all added from B, all removed from A."""
+        procs_a = {"p1": {"serviceName": "order-service"}}
+        procs_b = {"p1": {"serviceName": "payment-service"}}
+        trace_a = _make_raw_trace(
+            "aaa",
+            [_make_span("s1", "GET /orders", "p1")],
+            procs_a,
+        )
+        trace_b = _make_raw_trace(
+            "bbb",
+            [_make_span("s1", "POST /payments", "p1")],
+            procs_b,
+        )
+        result = _compare_traces_diff(trace_a, trace_b)
+        assert len(result["removed_spans"]) == 1
+        assert len(result["added_spans"]) == 1
+        assert result["changed_spans"] == []
+        assert result["unchanged_count"] == 0
+        assert result["removed_spans"][0]["operation_name"] == "GET /orders"
+        assert result["added_spans"][0]["operation_name"] == "POST /payments"
+
+    def test_compare_traces_diff_changed_duration(self) -> None:
+        """Same key, different duration → appears in changed_spans with correct delta."""
+        processes = {
+            "p1": {"serviceName": "order-service"},
+            "p2": {"serviceName": "db-service"},
+        }
+        trace_a = _make_raw_trace(
+            "aaa",
+            [
+                _make_span("s1", "GET /orders", "p1"),
+                _make_span("s2", "db.query", "p2", parent_span_id="s1", duration=200_000),
+            ],
+            processes,
+        )
+        trace_b = _make_raw_trace(
+            "bbb",
+            [
+                _make_span("s1", "GET /orders", "p1"),
+                _make_span("s2", "db.query", "p2", parent_span_id="s1", duration=300_000),
+            ],
+            processes,
+        )
+        result = _compare_traces_diff(trace_a, trace_b)
+        assert result["unchanged_count"] == 1  # root span unchanged
+        assert len(result["changed_spans"]) == 1
+        changed = result["changed_spans"][0]
+        assert changed["operation_name"] == "db.query"
+        assert changed["duration_a_us"] == 200_000
+        assert changed["duration_b_us"] == 300_000
+        assert changed["duration_delta_us"] == 100_000
+
+    def test_compare_traces_diff_changed_tags(self) -> None:
+        """Same key, different tags → tags_added/removed/changed populated."""
+        processes = {"p1": {"serviceName": "svc"}}
+        span_a = _make_span(
+            "s1",
+            "op",
+            "p1",
+            tags=[
+                {"key": "http.method", "value": "GET"},
+                {"key": "old_tag", "value": "old_value"},
+                {"key": "changed_tag", "value": "val_a"},
+            ],
+        )
+        span_b = _make_span(
+            "s1",
+            "op",
+            "p1",
+            tags=[
+                {"key": "http.method", "value": "GET"},
+                {"key": "new_tag", "value": "new_value"},
+                {"key": "changed_tag", "value": "val_b"},
+            ],
+        )
+        trace_a = _make_raw_trace("aaa", [span_a], processes)
+        trace_b = _make_raw_trace("bbb", [span_b], processes)
+        result = _compare_traces_diff(trace_a, trace_b)
+        assert len(result["changed_spans"]) == 1
+        changed = result["changed_spans"][0]
+        assert "new_tag" in changed["tags_added"]
+        assert "old_tag" in changed["tags_removed"]
+        assert "changed_tag" in changed["tags_changed"]
+        assert changed["tags_changed"]["changed_tag"] == "val_b"
+
+    def test_compare_traces_diff_empty_traces(self) -> None:
+        """Empty traces → 0 everything."""
+        trace_a = _make_raw_trace("aaa", [], {})
+        trace_b = _make_raw_trace("bbb", [], {})
+        result = _compare_traces_diff(trace_a, trace_b)
+        assert result["added_spans"] == []
+        assert result["removed_spans"] == []
+        assert result["changed_spans"] == []
+        assert result["unchanged_count"] == 0
+
+    def test_compare_traces_diff_added_span(self) -> None:
+        """B has one extra span → appears in added_spans."""
+        processes = {
+            "p1": {"serviceName": "order-service"},
+            "p2": {"serviceName": "db-service"},
+        }
+        trace_a = _make_raw_trace(
+            "aaa",
+            [_make_span("s1", "GET /orders", "p1")],
+            processes,
+        )
+        trace_b = _make_raw_trace(
+            "bbb",
+            [
+                _make_span("s1", "GET /orders", "p1"),
+                _make_span("s2", "db.query", "p2", parent_span_id="s1"),
+            ],
+            processes,
+        )
+        result = _compare_traces_diff(trace_a, trace_b)
+        assert result["unchanged_count"] == 1
+        assert len(result["added_spans"]) == 1
+        assert result["added_spans"][0]["operation_name"] == "db.query"
+        assert result["removed_spans"] == []
+
+    def test_compare_traces_diff_duplicate_spans(self) -> None:
+        """Two spans with same key in both → paired by order, extras go to added/removed."""
+        processes = {"p1": {"serviceName": "svc"}}
+        # Two spans with same key in A and B
+        trace_a = _make_raw_trace(
+            "aaa",
+            [
+                _make_span("s1", "db.query", "p1", duration=100_000),
+                _make_span("s2", "db.query", "p1", duration=200_000),
+            ],
+            processes,
+        )
+        trace_b = _make_raw_trace(
+            "bbb",
+            [
+                _make_span("s1", "db.query", "p1", duration=100_000),
+                _make_span("s2", "db.query", "p1", duration=200_000),
+            ],
+            processes,
+        )
+        result = _compare_traces_diff(trace_a, trace_b)
+        # Both pairs are identical → 2 unchanged
+        assert result["unchanged_count"] == 2
+        assert result["added_spans"] == []
+        assert result["removed_spans"] == []
+
+    def test_compare_traces_diff_duplicate_spans_extra(self) -> None:
+        """Uneven duplicates → extras go to added or removed."""
+        processes = {"p1": {"serviceName": "svc"}}
+        trace_a = _make_raw_trace(
+            "aaa",
+            [
+                _make_span("s1", "db.query", "p1", duration=100_000),
+                _make_span("s2", "db.query", "p1", duration=200_000),
+                _make_span("s3", "db.query", "p1", duration=300_000),
+            ],
+            processes,
+        )
+        trace_b = _make_raw_trace(
+            "bbb",
+            [
+                _make_span("s1", "db.query", "p1", duration=100_000),
+            ],
+            processes,
+        )
+        result = _compare_traces_diff(trace_a, trace_b)
+        # First pair: identical → 1 unchanged
+        # Two extras in A → 2 removed
+        assert result["unchanged_count"] == 1
+        assert len(result["removed_spans"]) == 2
+        assert result["added_spans"] == []
