@@ -43,7 +43,7 @@
 
 ### M5: Trace Analysis (Phases 8-10) — In Progress
 
-- [ ] Phase 8: Trace Comparison — COMP-01, COMP-02, COMP-03, COMP-04
+- [x] Phase 8: Trace Comparison — COMP-01, COMP-02, COMP-03, COMP-04
 - [ ] Phase 9: Span Statistics — STAT-01, STAT-02, STAT-03, STAT-04
 - [ ] Phase 10: Release v0.3.0 — REL-01, REL-02, REL-03
 
@@ -58,9 +58,9 @@
 **Plans:** 3 plans
 
 Plans:
-- [ ] 08-01-PLAN.md — TypedDicts + span matching/diff logic in models.py and shaping.py
-- [ ] 08-02-PLAN.md — jaeger_compare_traces MCP tool + integration/protocol tests
-- [ ] 08-03-PLAN.md — JaegerClient.compare_traces() facade method + facade tests
+- [x] 08-01-PLAN.md — TypedDicts + span matching/diff logic in models.py and shaping.py
+- [x] 08-02-PLAN.md — jaeger_compare_traces MCP tool + integration/protocol tests
+- [x] 08-03-PLAN.md — JaegerClient.compare_traces() facade method + facade tests
 
 **Success criteria:**
 1. `jaeger_compare_traces` tool registered and discoverable via MCP
@@ -76,6 +76,13 @@ Plans:
 **Requirements:** STAT-01, STAT-02, STAT-03, STAT-04
 
 **Depends on:** Phase 8 (shared shaping patterns), existing jaeger_search_traces tool
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] 09-01-PLAN.md — TypedDicts + percentile/aggregation logic in models.py and shaping.py
+- [ ] 09-02-PLAN.md — jaeger_span_statistics MCP tool + integration/protocol tests
+- [ ] 09-03-PLAN.md — JaegerClient.span_statistics() facade method + facade tests
 
 **Success criteria:**
 1. `jaeger_span_statistics` tool registered and discoverable via MCP
@@ -109,6 +116,6 @@ Plans:
 | 5. Release v0.2.0 | M3 | JGR-11 | Done | 2026-06-06 |
 | 6. Code Quality | M4 | JGR-12..15 | Done | 2026-06-08 |
 | 7. Validation & Tests | M4 | JGR-16, JGR-17 | Done | 2026-06-08 |
-| 8. Trace Comparison | M5 | COMP-01..04 | Not started | - |
+| 8. Trace Comparison | M5 | COMP-01..04 | Done | 2026-06-16 |
 | 9. Span Statistics | M5 | STAT-01..04 | Not started | - |
 | 10. Release v0.3.0 | M5 | REL-01..03 | Not started | - |
