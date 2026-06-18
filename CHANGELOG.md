@@ -5,6 +5,17 @@ All notable changes to `jaeger-mcp` will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 versioning: [SemVer](https://semver.org/).
 
+## [0.5.0] — 2026-06-19
+
+### Added
+
+- **Predictive Analytics capabilities** — proactive insights through predictive modeling of trace data patterns
+  - **`jaeger_predict_degradation` tool** — forecast likely performance issues 2-24 hours in advance
+  - **`jaeger_forecast_capacity` tool** — predict throughput demands and resource requirements for 7-30 days
+  - **`JaegerClient.predict_degradation()`** — facade method for in-process performance degradation prediction
+  - **`JaegerClient.forecast_capacity()`** — facade method for in-process capacity forecasting
+- **Predictive modeling engine** — core algorithms for performance forecasting and capacity planning
+
 ## [0.4.0] — 2026-06-18
 
 ### Added
