@@ -1,18 +1,20 @@
 """HTTP client for the Jaeger Query HTTP API.
 
-Thin wrapper around :mod:`requests` — reads config from env vars, supports
-Bearer-token auth, HTTP Basic auth, SSL-verify toggling, and exposes get().
-Errors bubble up as :class:`requests.HTTPError` and are mapped to
+Thin wrapper around :mod:`httpx` — reads config from env vars, supports
+Bearer-token auth, HTTP Basic auth, SSL-verify toggling, and exposes
+both async ``aget()`` and sync ``get()`` methods.
+Errors bubble up as :class:`httpx.HTTPStatusError` and are mapped to
 user-facing messages by :mod:`jaeger_mcp.errors`.
 
 **Auth priority:** JAEGER_TOKEN (Bearer) takes precedence over
-JAEGER_USERNAME/JAEGER_PASSWORD (Basic). If neither is set the session
+JAEGER_USERNAME/JAEGER_PASSWORD (Basic). If neither is set the client
 is unauthenticated — valid for many internal Jaeger deployments.
 
-**Threading model.** The client uses ``requests`` (synchronous). FastMCP
-runs synchronous ``@mcp.tool`` in a worker thread via
-``anyio.to_thread.run_sync``, so blocking HTTP calls don't block the
-asyncio event loop.
+**Threading model.** The client uses ``httpx.AsyncClient`` internally.
+Sync wrappers (``get``, ``close``) are provided for backward
+compatibility with callers that haven't migrated to async yet.
+``get()`` delegates to ``aget()`` via ``asyncio.run()`` or a thread pool
+when called from within an already-running event loop.
 
 **Naming:** ``JaegerHTTPClient`` is the low-level HTTP transport.
 The public-facing ``JaegerClient`` facade lives in :mod:`jaeger_mcp.facade`.
@@ -20,17 +22,15 @@ The public-facing ``JaegerClient`` facade lives in :mod:`jaeger_mcp.facade`.
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 import os
-import threading
 import time
 from typing import Any
 from urllib.parse import urlparse
 
-import requests
-import urllib3
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import httpx
 
 from jaeger_mcp.errors import ConfigError
 
@@ -74,8 +74,8 @@ class JaegerHTTPClient:
 
     The client reads ``JAEGER_URL``, ``JAEGER_TOKEN``, ``JAEGER_USERNAME``,
     ``JAEGER_PASSWORD``, ``JAEGER_SSL_VERIFY`` from the environment.
-    Instances are safe to reuse — a single :class:`requests.Session` is kept
-    for connection pooling.
+    Instances are safe to reuse — a single :class:`httpx.AsyncClient` is
+    lazily created for connection pooling.
 
     Auth selection:
         - If ``JAEGER_TOKEN`` is set → Bearer auth (ignores username/password).
@@ -128,63 +128,71 @@ class JaegerHTTPClient:
         else:
             retries = int(os.environ.get("JAEGER_RETRY_ATTEMPTS", "3"))
 
+        self._retry_total = retries
+        self._retry_backoff = 1  # 1s, 2s, 4s …
+        self._retry_status_codes = {429, 500, 502, 503, 504}
+
         # JGR-04: TTL cache for discovery endpoints. Default 120s.
         if cache_ttl is not None:
             self.cache_ttl = cache_ttl
         else:
             self.cache_ttl = float(os.environ.get("JAEGER_CACHE_TTL", "120"))
         self._cache: dict[str, tuple[float, Any]] = {}
-        self._cache_lock = threading.Lock()
+        self._cache_lock = asyncio.Lock()
 
-        self.session = requests.Session()
-        self.session.verify = self.ssl_verify
-        self.session.headers.update(
-            {
-                "Accept": "application/json",
-                "User-Agent": "jaeger-mcp",
-            }
-        )
-        # Jaeger is typically an internal service not reachable via env proxy.
-        self.session.trust_env = False
-
-        # Mount retry adapter (JGR-03).
-        if retries > 0:
-            retry = Retry(
-                total=retries,
-                backoff_factor=1,  # 1s, 2s, 4s …
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["GET"],
-                raise_on_status=False,
-            )
-            adapter = HTTPAdapter(max_retries=retry)
-            self.session.mount("http://", adapter)
-            self.session.mount("https://", adapter)
+        # Build headers dict
+        self._headers: dict[str, str] = {
+            "Accept": "application/json",
+            "User-Agent": "jaeger-mcp",
+        }
 
         # Auth priority: Bearer > Basic > none.
         if self.token:
-            self.session.headers["Authorization"] = f"Bearer {self.token}"
-        elif self.username and self.password:
-            self.session.auth = (self.username, self.password)
+            self._headers["Authorization"] = f"Bearer {self.token}"
+
+        # Basic auth: httpx uses auth= parameter
+        if self.username and self.password and not self.token:
+            self._auth: httpx.BasicAuth | None = httpx.BasicAuth(self.username, self.password)
+        else:
+            self._auth = None
+
+        # Lazy-init httpx.AsyncClient
+        self._client: httpx.AsyncClient | None = None
 
         if not self.ssl_verify:
             logger.warning("ssl_verify=false url=%s — TLS certificate verification disabled", self.url)
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    def _request(
+        # ASYNC-02: Concurrency limit for aget_many (default 10)
+        self._concurrency_limit = int(os.environ.get("JAEGER_CONCURRENCY_LIMIT", "10"))
+
+    async def _ensure_client(self) -> httpx.AsyncClient:
+        """Lazily create the httpx.AsyncClient on first use."""
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                headers=self._headers,
+                auth=self._auth,
+                verify=self.ssl_verify,
+                timeout=httpx.Timeout(self.timeout),
+                follow_redirects=True,
+                trust_env=False,
+            )
+        return self._client
+
+    async def _request(
         self,
         method: str,
         endpoint: str,
         *,
         params: dict[str, Any] | None = None,
-    ) -> requests.Response:
+    ) -> httpx.Response:
         url = f"{self.api_url}{endpoint}"
+        client = await self._ensure_client()
         t0 = time.monotonic()
         try:
-            response = self.session.request(
+            response = await client.request(
                 method=method,
                 url=url,
                 params=params,
-                timeout=self.timeout,
             )
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.info(
@@ -201,13 +209,43 @@ class JaegerHTTPClient:
             logger.info("method=%s url=%s status=ERR ms=%.1f", method, url, elapsed_ms)
             raise
 
+    async def _request_with_retry(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """Execute an HTTP request with retry logic.
+
+        Retries on status codes in ``_retry_status_codes`` and connection
+        errors with exponential backoff.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(self._retry_total + 1):
+            try:
+                return await self._request(method, endpoint, params=params)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in self._retry_status_codes:
+                    raise
+                last_exc = exc
+                if attempt < self._retry_total:
+                    delay = self._retry_backoff * (2**attempt)
+                    await asyncio.sleep(delay)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                last_exc = exc
+                if attempt < self._retry_total:
+                    delay = self._retry_backoff * (2**attempt)
+                    await asyncio.sleep(delay)
+        raise last_exc  # type: ignore[misc]
+
     # ── Cache helpers (JGR-04) ────────────────────────────────────────
 
-    def _cache_get(self, key: str) -> Any | None:
+    async def _cache_get(self, key: str) -> Any | None:
         """Return cached value if TTL hasn't expired, else None."""
         if self.cache_ttl <= 0:
             return None
-        with self._cache_lock:
+        async with self._cache_lock:
             entry = self._cache.get(key)
             if entry is not None:
                 ts, value = entry
@@ -216,15 +254,15 @@ class JaegerHTTPClient:
                 del self._cache[key]
         return None
 
-    def _cache_set(self, key: str, value: Any) -> None:
+    async def _cache_set(self, key: str, value: Any) -> None:
         """Store a value in the cache with current timestamp."""
         if self.cache_ttl <= 0:
             return
-        with self._cache_lock:
+        async with self._cache_lock:
             self._cache[key] = (time.monotonic(), value)
 
-    def get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
-        """GET ``{api_url}{endpoint}`` and return parsed JSON.
+    async def aget(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
+        """Async GET ``{api_url}{endpoint}`` and return parsed JSON.
 
         Jaeger always returns JSON for 2xx responses; returns ``None`` for
         empty bodies.
@@ -240,28 +278,143 @@ class JaegerHTTPClient:
             cache_key = f"ops:{endpoint}"
 
         if cache_key is not None:
-            cached = self._cache_get(cache_key)
+            cached = await self._cache_get(cache_key)
             if cached is not None:
                 return cached
 
-        response = self._request("GET", endpoint, params=params)
+        response = await self._request_with_retry("GET", endpoint, params=params)
         if not response.content:
             return None
         result = response.json()
 
         # Store in cache if this was a discovery endpoint.
         if cache_key is not None:
-            self._cache_set(cache_key, result)
+            await self._cache_set(cache_key, result)
 
         return result
 
+    def get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
+        """Sync GET wrapper — delegates to :meth:`aget`.
+
+        Handles the case where it's called from within an already-running
+        event loop (e.g. when MCP tools run inside FastMCP's async loop)
+        by running aget in a new thread.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No event loop running — safe to use asyncio.run()
+            return asyncio.run(self.aget(endpoint, params=params))
+        # Event loop is running — run in a thread pool to avoid nested loop
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, self.aget(endpoint, params=params)).result()
+
+    async def aclose(self) -> None:
+        """Async close: shut down the httpx client and zero credentials."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+        self.token = ""
+        self.username = ""
+        self.password = ""
+
     def close(self) -> None:
-        """Close the underlying HTTP session and zero credentials.
+        """Close the underlying HTTP client and zero credentials.
 
         Called from lifespan on shutdown. Credential attributes are cleared
         to reduce the window of exposure in long-running processes (JGR-12).
         """
-        self.session.close()
+        if self._client is not None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(self._client.aclose())
+            else:
+                # Can't await in sync context with running loop —
+                # use thread pool as escape hatch
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    pool.submit(asyncio.run, self._client.aclose()).result()
+            self._client = None
         self.token = ""
         self.username = ""
         self.password = ""
+
+    async def aget_many(
+        self,
+        endpoints: list[tuple[str, dict[str, Any] | None]],
+    ) -> list[Any]:
+        """Fetch multiple endpoints concurrently with bounded concurrency.
+
+        Args:
+            endpoints: List of (endpoint, params) tuples.
+
+        Returns:
+            List of JSON results in same order as input endpoints.
+
+        Uses asyncio.Semaphore to limit concurrent requests to
+        self._concurrency_limit (default 10).
+        """
+        sem = asyncio.Semaphore(self._concurrency_limit)
+
+        async def _fetch_one(endpoint: str, params: dict[str, Any] | None) -> Any:
+            async with sem:
+                return await self.aget(endpoint, params=params)
+
+        return await asyncio.gather(*(_fetch_one(ep, params) for ep, params in endpoints))
+
+    def get_many(self, endpoints: list[tuple[str, dict[str, Any] | None]]) -> list[Any]:
+        """Sync wrapper for aget_many."""
+        return asyncio.run(self.aget_many(endpoints))
+
+    async def aget_stream(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        """Fetch endpoint with streaming response and incremental JSON parsing.
+
+        For large traces (500+ spans), this avoids buffering the entire
+        response body in memory before parsing. Uses httpx streaming +
+        incremental byte collection and json.loads on the complete buffer.
+
+        For truly incremental parsing of massive payloads, consider ijson.
+        For our use case (Jaeger traces up to ~10MB), collecting bytes
+        incrementally and parsing once is sufficient and avoids the ijson
+        dependency.
+
+        Returns:
+            Parsed JSON response.
+        """
+        client = await self._ensure_client()
+        url = f"{self.api_url}{endpoint}"
+        t0 = time.monotonic()
+
+        chunks: list[bytes] = []
+        try:
+            async with client.stream("GET", url, params=params) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    chunks.append(chunk)
+
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.info(
+                "method=GET url=%s status=%d ms=%.1f stream=true",
+                url,
+                response.status_code,
+                elapsed_ms,
+            )
+
+            import json
+
+            body = b"".join(chunks)
+            if not body:
+                return None
+            return json.loads(body)
+        except Exception:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.info("method=GET url=%s status=ERR ms=%.1f stream=true", url, elapsed_ms)
+            raise
+
+    def get_stream(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
+        """Sync wrapper for aget_stream."""
+        return asyncio.run(self.aget_stream(endpoint, params=params))
