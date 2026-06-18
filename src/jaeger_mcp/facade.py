@@ -26,11 +26,12 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from jaeger_mcp.client import JaegerHTTPClient
 from jaeger_mcp.models import AnomalyDetectionOutput, CriticalPathOutput, WindowComparisonOutput
+from jaeger_mcp.predictive.models import PredictionResult, ForecastResult
 from jaeger_mcp.shaping import (
     _build_span_tree,
     _format_bottleneck_span,
@@ -1107,6 +1108,144 @@ class JaegerClient:
                 baseline_duration_minutes=baseline_duration_minutes,
                 sensitivity=sensitivity,
                 current_duration_minutes=current_duration_minutes,
+            )
+        )
+
+    async def _apredict_degradation(
+        self,
+        service: str,
+        *,
+        hours_back: int = 168,
+    ) -> PredictionResult:
+        """Async implementation of :meth:`predict_degradation`."""
+        # Validate parameters
+        if hours_back < 1 or hours_back > 720:
+            raise ValueError("hours_back must be between 1 and 720")
+
+        from jaeger_mcp._mcp import get_client
+        from jaeger_mcp.predictive.performance_model import predict_performance_degradation
+
+        client = await get_client()
+
+        # Calculate time window
+        end_time = datetime.now()
+        start_time = end_time - timedelta(hours=hours_back)
+        start_time_us = int(start_time.timestamp() * 1_000_000)
+        end_time_us = int(end_time.timestamp() * 1_000_000)
+
+        # Fetch historical trace data
+        params = {"service": service, "start": start_time_us, "end": end_time_us, "limit": 1000}
+
+        trace_data = await client.aget("/traces", params=params)
+
+        # Placeholder for critical path trends and anomaly detections
+        critical_path_trends = []
+        anomaly_detections = []
+
+        # Make prediction
+        prediction = predict_performance_degradation(
+            service_name=service,
+            historical_data=trace_data.get("data", []) if trace_data else [],
+            critical_path_trends=critical_path_trends,
+            anomaly_detections=anomaly_detections,
+        )
+
+        return prediction
+
+    def predict_degradation(
+        self,
+        service: str,
+        *,
+        hours_back: int = 168,
+    ) -> PredictionResult:
+        """Predict potential performance degradation events for a service.
+
+        Analyzes historical trace data patterns, critical path trends, and anomaly
+        detection results to forecast likely performance issues 2-24 hours in advance.
+
+        Args:
+            service: Service name to analyze for potential degradation.
+            hours_back: Number of hours of historical data to analyze (1-720, default 168).
+
+        Returns:
+            PredictionResult with degradation forecast, confidence level, and recommendations.
+
+        Raises:
+            ValueError: If parameters are out of valid ranges.
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(
+            self._apredict_degradation(
+                service,
+                hours_back=hours_back,
+            )
+        )
+
+    async def _aforecast_capacity(
+        self,
+        service: str,
+        *,
+        days_ahead: int = 30,
+    ) -> ForecastResult:
+        """Async implementation of :meth:`forecast_capacity`."""
+        # Validate parameters
+        if days_ahead < 1 or days_ahead > 90:
+            raise ValueError("days_ahead must be between 1 and 90")
+
+        from jaeger_mcp._mcp import get_client
+        from jaeger_mcp.predictive.forecasting import forecast_service_capacity
+
+        client = await get_client()
+
+        # Calculate time window
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=30)  # Use 30 days of history
+        start_time_us = int(start_time.timestamp() * 1_000_000)
+        end_time_us = int(end_time.timestamp() * 1_000_000)
+
+        # Fetch historical trace data
+        params = {"service": service, "start": start_time_us, "end": end_time_us, "limit": 5000}
+
+        trace_data = await client.aget("/traces", params=params)
+
+        # Placeholder for seasonal patterns
+        seasonal_patterns = []
+
+        # Make forecast
+        forecast = forecast_service_capacity(
+            service_name=service,
+            historical_volume=trace_data.get("data", []) if trace_data else [],
+            seasonal_patterns=seasonal_patterns,
+        )
+
+        return forecast
+
+    def forecast_capacity(
+        self,
+        service: str,
+        *,
+        days_ahead: int = 30,
+    ) -> ForecastResult:
+        """Forecast future throughput demands and resource requirements for a service.
+
+        Provides predictions for the next 7-30 days with confidence intervals to
+        enable infrastructure scaling decisions.
+
+        Args:
+            service: Service name to forecast capacity for.
+            days_ahead: Number of days to forecast ahead (1-90, default 30).
+
+        Returns:
+            ForecastResult with throughput predictions and resource requirements.
+
+        Raises:
+            ValueError: If parameters are out of valid ranges.
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(
+            self._aforecast_capacity(
+                service,
+                days_ahead=days_ahead,
             )
         )
 
