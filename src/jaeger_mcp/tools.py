@@ -1485,3 +1485,12 @@ async def jaeger_detect_anomalies(
             f"detecting anomalies for service {service!r} "
             f"(baseline: {baseline_duration_minutes}min, sensitivity: {sensitivity})",
         )
+
+
+# ── Predictive Analytics ─────────────────────────────────────────────────
+
+
+from .predictive.tools import (
+    jaeger_predict_degradation,
+    jaeger_forecast_capacity,
+)
