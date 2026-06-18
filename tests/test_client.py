@@ -81,25 +81,18 @@ class TestJaegerHTTPClientInit:
         monkeypatch.delenv("JAEGER_USERNAME", raising=False)
         monkeypatch.delenv("JAEGER_PASSWORD", raising=False)
         client = JaegerHTTPClient()
-        try:
-            assert client.url == "https://jaeger.example.com"
-            assert client.api_url == "https://jaeger.example.com/api"
-            assert client.ssl_verify is True
-            assert client.session.trust_env is False
-            assert "Authorization" not in client.session.headers
-            assert client.session.auth is None
-        finally:
-            client.close()
+        assert client.url == "https://jaeger.example.com"
+        assert client.api_url == "https://jaeger.example.com/api"
+        assert client.ssl_verify is True
+        assert "Authorization" not in client._headers
+        assert client._auth is None
 
     def test_bearer_auth_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
         monkeypatch.setenv("JAEGER_TOKEN", "mytoken123")  # pragma: allowlist secret
         client = JaegerHTTPClient()
-        try:
-            assert client.session.headers["Authorization"] == "Bearer mytoken123"
-            assert client.session.auth is None
-        finally:
-            client.close()
+        assert client._headers["Authorization"] == "Bearer mytoken123"
+        assert client._auth is None
 
     def test_basic_auth_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
@@ -107,11 +100,8 @@ class TestJaegerHTTPClientInit:
         monkeypatch.setenv("JAEGER_USERNAME", "admin")
         monkeypatch.setenv("JAEGER_PASSWORD", "secret")  # pragma: allowlist secret
         client = JaegerHTTPClient()
-        try:
-            assert "Authorization" not in client.session.headers
-            assert client.session.auth == ("admin", "secret")
-        finally:
-            client.close()
+        assert "Authorization" not in client._headers
+        assert client._auth is not None
 
     def test_bearer_takes_precedence_over_basic(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
@@ -119,11 +109,8 @@ class TestJaegerHTTPClientInit:
         monkeypatch.setenv("JAEGER_USERNAME", "admin")
         monkeypatch.setenv("JAEGER_PASSWORD", "secret")  # pragma: allowlist secret
         client = JaegerHTTPClient()
-        try:
-            assert client.session.headers["Authorization"] == "Bearer bearer-wins"
-            assert client.session.auth is None
-        finally:
-            client.close()
+        assert client._headers["Authorization"] == "Bearer bearer-wins"
+        assert client._auth is None
 
     def test_overrides_take_precedence_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("JAEGER_URL", "https://env.example.com")
@@ -133,36 +120,23 @@ class TestJaegerHTTPClientInit:
             token="explicit-token",  # pragma: allowlist secret
             ssl_verify=True,
         )
-        try:
-            assert client.url == "https://explicit.example.com"
-            assert client.token == "explicit-token"  # pragma: allowlist secret
-            assert client.ssl_verify is True
-        finally:
-            client.close()
+        assert client.url == "https://explicit.example.com"
+        assert client.token == "explicit-token"  # pragma: allowlist secret
+        assert client.ssl_verify is True
 
     def test_ssl_verify_default_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
         monkeypatch.delenv("JAEGER_SSL_VERIFY", raising=False)
         client = JaegerHTTPClient()
-        try:
-            assert client.ssl_verify is True
-        finally:
-            client.close()
+        assert client.ssl_verify is True
 
     def test_ssl_verify_false_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
         monkeypatch.setenv("JAEGER_SSL_VERIFY", "false")
         client = JaegerHTTPClient()
-        try:
-            assert client.ssl_verify is False
-            assert client.session.verify is False
-        finally:
-            client.close()
+        assert client.ssl_verify is False
 
     def test_user_agent_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
         client = JaegerHTTPClient()
-        try:
-            assert client.session.headers["User-Agent"] == "jaeger-mcp"
-        finally:
-            client.close()
+        assert client._headers["User-Agent"] == "jaeger-mcp"

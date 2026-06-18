@@ -177,3 +177,114 @@ class SpanStatisticsOutput(TypedDict):
     operation: str | None
     trace_count: int
     stats: list[OperationStats]
+
+
+# ── Batch Window Comparison ──────────────────────────────────────────────────
+
+
+class OperationDiff(TypedDict):
+    """Difference in behavior for a single operation between two time windows."""
+
+    operation: str
+    baseline_count: int
+    comparison_count: int
+    count_delta: int
+    baseline_p50_us: int
+    comparison_p50_us: int
+    p50_delta_us: int
+    p50_delta_pct: float
+    baseline_p95_us: int
+    comparison_p95_us: int
+    p95_delta_us: int
+    p95_delta_pct: float
+    baseline_error_rate: float
+    comparison_error_rate: float
+    error_rate_delta: float
+    change_type: str  # "added", "removed", "faster", "slower", "unchanged"
+    deviation_score: float
+
+
+class WindowComparisonOutput(TypedDict):
+    """Comparison of aggregate trace behavior between two time windows."""
+
+    service: str
+    baseline_start: int
+    baseline_end: int
+    comparison_start: int
+    comparison_end: int
+    operations: list[OperationDiff]
+    total_operations: int
+    added_count: int
+    removed_count: int
+    faster_count: int
+    slower_count: int
+    overall_deviation_score: float
+
+
+# ── Critical Path Analysis ───────────────────────────────────────────────────
+
+
+class CriticalPathSpan(TypedDict):
+    """A span on the critical path with timing information."""
+
+    span_id: str
+    operation: str
+    service: str
+    duration_us: int
+    cumulative_duration_us: int
+    percentage_of_total: float
+
+
+class BottleneckSpan(TypedDict):
+    """A span ranked by self-time (bottleneck)."""
+
+    span_id: str
+    operation: str
+    service: str
+    duration_us: int
+    self_time_us: int
+    self_time_percentage: float
+
+
+class CriticalPathOutput(TypedDict):
+    """Critical path analysis result."""
+
+    trace_id: str
+    root_operation: str | None
+    total_duration_us: int
+    critical_path: list[CriticalPathSpan]
+    critical_path_duration_us: int
+    critical_path_percentage: float
+    bottlenecks: list[BottleneckSpan]
+    bottleneck_count: int
+
+
+# ── Anomaly Detection ────────────────────────────────────────────────────────
+
+
+class OperationAnomaly(TypedDict):
+    """An operation flagged as anomalous with details."""
+
+    operation: str
+    anomaly_type: str  # "latency" or "error_rate"
+    baseline_stat: str  # "p95_duration_us" or "error_rate"
+    baseline_value: float
+    current_value: float
+    z_score: float
+    severity: str  # "low", "medium", "high", "critical"
+    trace_count: int
+
+
+class AnomalyDetectionOutput(TypedDict):
+    """Results of anomaly detection for a service."""
+
+    service: str
+    baseline_start: int
+    baseline_end: int
+    current_start: int
+    current_end: int
+    anomalies: list[OperationAnomaly]
+    total_anomalies: int
+    latency_anomalies: int
+    error_rate_anomalies: int
+    sensitivity: float

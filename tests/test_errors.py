@@ -2,14 +2,14 @@
 
 Verifies that every HTTP status we special-case produces an actionable
 message that names the relevant env vars where appropriate and hints at
-a concrete next step. Network failures are simulated via :mod:`responses`.
+a concrete next step. Network failures are simulated via constructed
+httpx exceptions.
 """
 
 from __future__ import annotations
 
 import pytest
-import requests
-import responses
+import httpx
 
 from jaeger_mcp.errors import ConfigError, handle
 
@@ -18,19 +18,14 @@ def _http_error(
     status: int,
     url: str = "https://jaeger.example.com/api/services",
     body: str | None = None,
-) -> requests.HTTPError:
-    """Trigger a real ``requests.HTTPError`` carrying a response with ``status``."""
-    with responses.RequestsMock() as rsps:
-        if body is None:
-            rsps.add(responses.GET, url, json={}, status=status)
-        else:
-            rsps.add(responses.GET, url, body=body, status=status)
-        try:
-            r = requests.get(url, timeout=5)
-            r.raise_for_status()
-        except requests.HTTPError as e:
-            return e
-    raise AssertionError(f"expected HTTPError for status {status}")  # pragma: no cover
+) -> httpx.HTTPStatusError:
+    """Construct a real ``httpx.HTTPStatusError`` carrying a response with ``status``."""
+    request = httpx.Request("GET", url)
+    if body is None:
+        response = httpx.Response(status, request=request, json={})
+    else:
+        response = httpx.Response(status, request=request, text=body)
+    return httpx.HTTPStatusError(f"HTTP {status}", request=request, response=response)
 
 
 class TestConfigError:
@@ -86,31 +81,21 @@ class TestHttpStatusMapping:
         assert "transient" in msg or "api/services" in msg
 
     def test_unknown_4xx_includes_body_snippet(self) -> None:
-        with responses.RequestsMock() as rsps:
-            rsps.add(
-                responses.GET,
-                "https://jaeger.example.com/api/x",
-                body="teapot!" * 50,
-                status=418,
-            )
-            try:
-                r = requests.get("https://jaeger.example.com/api/x", timeout=5)
-                r.raise_for_status()
-            except requests.HTTPError as e:
-                msg = handle(e, "teapot call")
-                assert "418" in msg
-                assert "teapot" in msg
+        err = _http_error(418, url="https://jaeger.example.com/api/x", body="teapot!" * 50)
+        msg = handle(err, "teapot call")
+        assert "418" in msg
+        assert "teapot" in msg
 
 
 class TestNetworkErrors:
     def test_connection_error_mentions_url_and_port(self) -> None:
-        msg = handle(requests.ConnectionError("DNS fail"), "listing services")
+        msg = handle(httpx.ConnectError("DNS fail"), "listing services")
         assert "connect" in msg.lower()
         assert "JAEGER_URL" in msg
         assert "16686" in msg
 
     def test_timeout_mentions_limit(self) -> None:
-        msg = handle(requests.Timeout("slow"), "searching traces")
+        msg = handle(httpx.TimeoutException("slow"), "searching traces")
         assert "timed out" in msg
         assert "limit" in msg
 

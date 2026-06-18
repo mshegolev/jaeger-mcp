@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -15,7 +15,7 @@ from jaeger_mcp.client import JaegerHTTPClient
 logger = logging.getLogger(__name__)
 
 _client: JaegerHTTPClient | None = None
-_client_lock = threading.Lock()
+_client_lock = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -26,10 +26,10 @@ async def app_lifespan(_app: FastMCP) -> AsyncIterator[dict[str, Any]]:
         yield {}
     finally:
         global _client
-        with _client_lock:
+        async with _client_lock:
             if _client is not None:
                 try:
-                    _client.close()
+                    await _client.aclose()
                 except Exception:
                     logger.warning("jaeger_mcp: error closing HTTP client on shutdown", exc_info=True)
                 _client = None
@@ -39,17 +39,16 @@ async def app_lifespan(_app: FastMCP) -> AsyncIterator[dict[str, Any]]:
 mcp = FastMCP("jaeger_mcp", lifespan=app_lifespan)
 
 
-def get_client() -> JaegerHTTPClient:
-    """Return a cached :class:`JaegerHTTPClient` (thread-safe lazy-init).
+async def get_client() -> JaegerHTTPClient:
+    """Return a cached :class:`JaegerHTTPClient` (async lazy-init).
 
-    FastMCP runs synchronous tools in worker threads via
-    ``anyio.to_thread.run_sync``; concurrent first-calls could otherwise
-    race on the ``_client`` global. The lock ensures exactly one instance
-    is constructed.
+    Uses ``asyncio.Lock`` with double-checked locking to ensure exactly
+    one :class:`JaegerHTTPClient` is constructed, even under concurrent
+    ``await get_client()`` calls within the event loop.
     """
     global _client
     if _client is None:
-        with _client_lock:
+        async with _client_lock:
             if _client is None:  # double-checked locking
                 _client = JaegerHTTPClient()
     return _client

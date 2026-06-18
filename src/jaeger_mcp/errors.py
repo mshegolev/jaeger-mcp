@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import requests
+import httpx
 
 
 class ConfigError(ValueError):
@@ -29,8 +29,8 @@ def handle(exc: Exception, action: str) -> str:
             "JAEGER_SSL_VERIFY environment variables."
         )
 
-    if isinstance(exc, requests.HTTPError):
-        code = exc.response.status_code if exc.response is not None else None
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
         if code == 401:
             return (
                 f"Error: authentication failed (HTTP 401) while {action}. "
@@ -54,11 +54,10 @@ def handle(exc: Exception, action: str) -> str:
             )
         if code == 400:
             body = ""
-            if exc.response is not None:
-                try:
-                    body = exc.response.text[:300]
-                except Exception:
-                    pass
+            try:
+                body = exc.response.text[:300]
+            except Exception:
+                pass
             return (
                 f"Error: bad request (HTTP 400) while {action}. "
                 "Jaeger rejected the parameters — check query params like tags JSON format, "
@@ -77,21 +76,20 @@ def handle(exc: Exception, action: str) -> str:
                 "check Jaeger query service health at JAEGER_URL/api/services."
             )
         body = ""
-        if exc.response is not None:
-            try:
-                body = exc.response.text[:200]
-            except Exception:
-                pass
+        try:
+            body = exc.response.text[:200]
+        except Exception:
+            pass
         return f"Error: HTTP {code} while {action}. Response: {body}"
 
-    if isinstance(exc, requests.ConnectionError):
+    if isinstance(exc, httpx.ConnectError):
         return (
             f"Error: could not connect to Jaeger while {action}. "
             "Check JAEGER_URL is set and reachable (e.g. https://jaeger.example.com). "
             "Jaeger query service runs on port 16686 by default."
         )
 
-    if isinstance(exc, requests.Timeout):
+    if isinstance(exc, httpx.TimeoutException):
         return (
             f"Error: request timed out while {action}. "
             "Check network latency and retry; reduce the limit parameter if searching traces."

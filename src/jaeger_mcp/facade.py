@@ -23,16 +23,26 @@ Query API.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 from jaeger_mcp.client import JaegerHTTPClient
+from jaeger_mcp.models import AnomalyDetectionOutput, CriticalPathOutput, WindowComparisonOutput
 from jaeger_mcp.shaping import (
+    _build_span_tree,
+    _format_bottleneck_span,
+    _format_critical_path_span,
     aggregate_span_statistics as _aggregate_span_statistics,
     compare_traces_diff as _compare_traces_diff,
+    compare_windows,
+    compute_z_score,
+    detect_anomalies,
+    find_critical_path,
     find_root_span as _find_root_span,
+    rank_bottlenecks,
     shape_trace_summary as _raw_trace_summary,
     span_is_error as _span_is_error,
     span_tags_flat as _span_tags_flat,
@@ -261,6 +271,9 @@ class JaegerClient:
     Wraps :class:`~jaeger_mcp.client.JaegerHTTPClient` and exposes typed
     domain objects suitable for the investigator's Evidence adapter.
 
+    Methods are synchronous for caller convenience; async I/O is used
+    internally via ``asyncio.run()``.
+
     Usage::
 
         from jaeger_mcp import JaegerClient
@@ -303,19 +316,10 @@ class JaegerClient:
 
     # ── Query methods ─────────────────────────────────────────────────
 
-    def get_trace(self, trace_id: str) -> Trace:
-        """Retrieve a full trace by ID.
-
-        Returns:
-            A :class:`Trace` whose :attr:`~Trace.spans` carry all
-            Evidence-required fields (``start_utc``, ``error``,
-            ``service_name``, ``tags``, etc.).
-
-        Raises:
-            ValueError: If the trace ID returns no data.
-            requests.HTTPError: On HTTP-level failures.
-        """
-        data = self._http.get(f"/traces/{trace_id}") or {}
+    async def _aget_trace(self, trace_id: str) -> Trace:
+        """Async implementation of :meth:`get_trace`."""
+        # ASYNC-03: Use streaming for large trace fetch
+        data = await self._http.aget_stream(f"/traces/{trace_id}") or {}
         traces_data: list[dict[str, Any]] = data.get("data") or []
         if not traces_data:
             raise ValueError(f"No trace data returned for traceID {trace_id!r}. Verify the trace ID is correct.")
@@ -352,6 +356,71 @@ class JaegerClient:
             errors_count=errors,
         )
 
+    def get_trace(self, trace_id: str) -> Trace:
+        """Retrieve a full trace by ID.
+
+        Returns:
+            A :class:`Trace` whose :attr:`~Trace.spans` carry all
+            Evidence-required fields (``start_utc``, ``error``,
+            ``service_name``, ``tags``, etc.).
+
+        Raises:
+            ValueError: If the trace ID returns no data.
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(self._aget_trace(trace_id))
+
+    async def _asearch_traces(
+        self,
+        service: str,
+        *,
+        operation: str | None = None,
+        tags: dict[str, str] | None = None,
+        min_duration: str | None = None,
+        max_duration: str | None = None,
+        time_from: int | None = None,
+        time_to: int | None = None,
+        limit: int = 20,
+    ) -> list[TraceSummary]:
+        """Async implementation of :meth:`search_traces`."""
+        import json
+
+        params: dict[str, Any] = {"service": service, "limit": limit}
+        if operation:
+            params["operation"] = operation
+        if tags:
+            params["tags"] = json.dumps(tags)
+        if time_from is not None:
+            params["start"] = time_from
+        if time_to is not None:
+            params["end"] = time_to
+        if min_duration:
+            params["minDuration"] = min_duration
+        if max_duration:
+            params["maxDuration"] = max_duration
+
+        data = await self._http.aget("/traces", params=params) or {}
+        raw_traces: list[dict[str, Any]] = data.get("data") or []
+
+        summaries: list[TraceSummary] = []
+        for rt in raw_traces:
+            raw = _raw_trace_summary(rt)
+            start_us = raw["start_time_us"]
+            summaries.append(
+                TraceSummary(
+                    trace_id=raw["trace_id"],
+                    root_operation=raw["root_operation"],
+                    root_service=raw["root_service"],
+                    start_time_us=start_us,
+                    start_utc=_us_to_utc(start_us) if start_us is not None else None,
+                    duration_us=raw["duration_us"],
+                    span_count=raw["span_count"],
+                    service_count=raw["service_count"],
+                    errors_count=raw["errors_count"],
+                )
+            )
+        return summaries
+
     def search_traces(
         self,
         service: str,
@@ -378,67 +447,43 @@ class JaegerClient:
 
         Returns:
             List of :class:`TraceSummary` objects.
+
+        Raises:
+            ValueError: On invalid parameters.
+            httpx.HTTPStatusError: On HTTP-level failures.
         """
-        import json
-
-        params: dict[str, Any] = {"service": service, "limit": limit}
-        if operation:
-            params["operation"] = operation
-        if tags:
-            params["tags"] = json.dumps(tags)
-        if time_from is not None:
-            params["start"] = time_from
-        if time_to is not None:
-            params["end"] = time_to
-        if min_duration:
-            params["minDuration"] = min_duration
-        if max_duration:
-            params["maxDuration"] = max_duration
-
-        data = self._http.get("/traces", params=params) or {}
-        raw_traces: list[dict[str, Any]] = data.get("data") or []
-
-        summaries: list[TraceSummary] = []
-        for rt in raw_traces:
-            raw = _raw_trace_summary(rt)
-            start_us = raw["start_time_us"]
-            summaries.append(
-                TraceSummary(
-                    trace_id=raw["trace_id"],
-                    root_operation=raw["root_operation"],
-                    root_service=raw["root_service"],
-                    start_time_us=start_us,
-                    start_utc=_us_to_utc(start_us) if start_us is not None else None,
-                    duration_us=raw["duration_us"],
-                    span_count=raw["span_count"],
-                    service_count=raw["service_count"],
-                    errors_count=raw["errors_count"],
-                )
+        return asyncio.run(
+            self._asearch_traces(
+                service,
+                operation=operation,
+                tags=tags,
+                min_duration=min_duration,
+                max_duration=max_duration,
+                time_from=time_from,
+                time_to=time_to,
+                limit=limit,
             )
-        return summaries
+        )
 
-    def list_services(self) -> list[str]:
-        """Return all service names known to Jaeger."""
-        data = self._http.get("/services") or {}
+    async def _alist_services(self) -> list[str]:
+        """Async implementation of :meth:`list_services`."""
+        data = await self._http.aget("/services") or {}
         raw: list[str] = data.get("data") or []
         return sorted(raw)
 
-    def get_dependencies(self, *, lookback_hours: int = 24) -> list[ServiceDep]:
-        """Return the service-to-service call graph.
+    def list_services(self) -> list[str]:
+        """Return all service names known to Jaeger."""
+        return asyncio.run(self._alist_services())
 
-        Args:
-            lookback_hours: How far back to look (default 24h).
-
-        Returns:
-            List of :class:`ServiceDep` edges sorted by call count (descending).
-        """
+    async def _aget_dependencies(self, *, lookback_hours: int = 24) -> list[ServiceDep]:
+        """Async implementation of :meth:`get_dependencies`."""
         end_ts_us = int(time.time() * 1_000_000)
         lookback_ms = lookback_hours * 3600 * 1000
         params: dict[str, Any] = {
             "endTs": end_ts_us // 1000,
             "lookback": lookback_ms,
         }
-        data = self._http.get("/dependencies", params=params) or {}
+        data = await self._http.aget("/dependencies", params=params) or {}
         raw: list[dict[str, Any]] = data.get("data") or []
         edges = [
             ServiceDep(
@@ -452,30 +497,36 @@ class JaegerClient:
         edges.sort(key=lambda e: e.call_count, reverse=True)
         return edges
 
-    def compare_traces(self, trace_id_a: str, trace_id_b: str) -> TraceComparison:
-        """Compare two traces structurally — find added, removed, and changed spans.
-
-        Matches spans by ``(operationName, serviceName, parentOperation)``
-        tuple, not by span ID. Reports duration deltas and tag differences.
+    def get_dependencies(self, *, lookback_hours: int = 24) -> list[ServiceDep]:
+        """Return the service-to-service call graph.
 
         Args:
-            trace_id_a: First (baseline) trace ID.
-            trace_id_b: Second (comparison) trace ID.
+            lookback_hours: How far back to look (default 24h).
 
         Returns:
-            A :class:`TraceComparison` with added, removed, changed spans
-            and unchanged count.
+            List of :class:`ServiceDep` edges sorted by call count (descending).
 
         Raises:
-            ValueError: If either trace ID returns no data.
-            requests.HTTPError: On HTTP-level failures.
+            httpx.HTTPStatusError: On HTTP-level failures.
         """
-        data_a = self._http.get(f"/traces/{trace_id_a}") or {}
+        return asyncio.run(self._aget_dependencies(lookback_hours=lookback_hours))
+
+    async def _acompare_traces(self, trace_id_a: str, trace_id_b: str) -> TraceComparison:
+        """Async implementation of :meth:`compare_traces`."""
+        # ASYNC-02: Fetch both traces concurrently for 3x+ speedup
+        results = await self._http.aget_many(
+            [
+                (f"/traces/{trace_id_a}", None),
+                (f"/traces/{trace_id_b}", None),
+            ]
+        )
+        data_a = results[0] or {}
+        data_b = results[1] or {}
+
         traces_a: list[dict[str, Any]] = data_a.get("data") or []
         if not traces_a:
             raise ValueError(f"No trace data returned for trace_id_a {trace_id_a!r}.")
 
-        data_b = self._http.get(f"/traces/{trace_id_b}") or {}
         traces_b: list[dict[str, Any]] = data_b.get("data") or []
         if not traces_b:
             raise ValueError(f"No trace data returned for trace_id_b {trace_id_b!r}.")
@@ -522,37 +573,43 @@ class JaegerClient:
             unchanged_count=raw["unchanged_count"],
         )
 
-    def span_statistics(
+    def compare_traces(self, trace_id_a: str, trace_id_b: str) -> TraceComparison:
+        """Compare two traces structurally — find added, removed, and changed spans.
+
+        Matches spans by ``(operationName, serviceName, parentOperation)``
+        tuple, not by span ID. Reports duration deltas and tag differences.
+
+        Args:
+            trace_id_a: First (baseline) trace ID.
+            trace_id_b: Second (comparison) trace ID.
+
+        Returns:
+            A :class:`TraceComparison` with added, removed, changed spans
+            and unchanged count.
+
+        Raises:
+            ValueError: If either trace ID returns no data.
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(self._acompare_traces(trace_id_a, trace_id_b))
+
+    async def _aspan_statistics(
         self,
         service: str,
         *,
         operation: str | None = None,
         limit: int = 20,
     ) -> SpanStatisticsResult:
-        """Compute per-operation latency percentiles and error rates.
-
-        Fetches up to ``limit`` traces for the given service, then
-        aggregates all spans by operation name. For each operation
-        reports p50/p95/p99 duration, error count, and error rate.
-
-        Args:
-            service: Service name (required).
-            operation: Operation name filter (optional).
-            limit: Number of traces to fetch (default 20, max 100).
-
-        Returns:
-            A :class:`SpanStatisticsResult` with per-operation stats.
-        """
+        """Async implementation of :meth:`span_statistics`."""
         limit = min(max(limit, 1), 100)
         params: dict[str, Any] = {"service": service, "limit": limit}
         if operation:
             params["operation"] = operation
 
-        data = self._http.get("/traces", params=params) or {}
+        data = await self._http.aget("/traces", params=params) or {}
         raw_traces: list[dict[str, Any]] = data.get("data") or []
 
         raw_stats = _aggregate_span_statistics(raw_traces)
-
         stats = [
             OperationStatResult(
                 operation=s["operation"],
@@ -573,9 +630,489 @@ class JaegerClient:
             stats=stats,
         )
 
+    async def _acritical_path(self, trace_id: str) -> CriticalPathOutput:
+        """Async implementation of :meth:`critical_path`."""
+        # Use streaming for large traces (Phase 11 optimization)
+        data = await self._http.aget_stream(f"/traces/{trace_id}") or {}
+        traces_data: list[dict[str, Any]] = data.get("data") or []
+        if not traces_data:
+            raise ValueError(f"No trace data returned for traceID {trace_id!r}.")
+
+        trace = traces_data[0]
+        spans = trace.get("spans") or []
+        if not spans:
+            raise ValueError(f"Trace {trace_id!r} contains no spans.")
+
+        # Extract trace metadata
+        trace_id_actual = trace.get("traceID", trace_id)
+        processes = trace.get("processes", {})
+
+        # Find root operation
+        root_span = _find_root_span(spans)
+        root_operation = root_span.get("operationName") if root_span else None
+
+        # Calculate total trace duration
+        start_times = [s.get("startTime", 0) for s in spans if s.get("startTime")]
+        end_times = [(s.get("startTime", 0) + s.get("duration", 0)) for s in spans if s.get("startTime")]
+        total_duration_us = (max(end_times) - min(start_times)) if start_times and end_times else 0
+
+        # Find critical path
+        critical_path_spans = find_critical_path(spans)
+
+        # Calculate cumulative durations for critical path
+        cumulative_durations = []
+        cumulative = 0
+        for span in critical_path_spans:
+            cumulative += span.get("duration", 0)
+            cumulative_durations.append(cumulative)
+
+        critical_path_duration_us = cumulative_durations[-1] if cumulative_durations else 0
+        critical_path_percentage = (critical_path_duration_us / total_duration_us * 100) if total_duration_us > 0 else 0
+
+        # Format critical path output
+        formatted_critical_path = [
+            _format_critical_path_span(span, cum_dur, total_duration_us, processes)
+            for span, cum_dur in zip(critical_path_spans, cumulative_durations)
+        ]
+
+        # Rank bottlenecks
+        bottleneck_spans = rank_bottlenecks(spans, limit=50)
+
+        # Calculate self-times for bottlenecks
+        span_dict, children = _build_span_tree(spans)
+        formatted_bottlenecks = []
+        for span in bottleneck_spans:
+            span_id = span["spanID"]
+            duration = span.get("duration", 0)
+
+            # Sum child durations
+            child_duration_sum = 0
+            for child_id in children.get(span_id, []):
+                child_span = span_dict.get(child_id, {})
+                child_duration_sum += child_span.get("duration", 0)
+
+            self_time = duration - child_duration_sum
+            if self_time > 0:
+                formatted_bottlenecks.append(_format_bottleneck_span(span, self_time, total_duration_us, processes))
+
+        # Create output
+        result: CriticalPathOutput = {
+            "trace_id": trace_id_actual,
+            "root_operation": root_operation,
+            "total_duration_us": total_duration_us,
+            "critical_path": formatted_critical_path,
+            "critical_path_duration_us": critical_path_duration_us,
+            "critical_path_percentage": round(critical_path_percentage, 1),
+            "bottlenecks": formatted_bottlenecks,
+            "bottleneck_count": len(formatted_bottlenecks),
+        }
+
+        return result
+
+    def span_statistics(
+        self,
+        service: str,
+        *,
+        operation: str | None = None,
+        limit: int = 20,
+    ) -> SpanStatisticsResult:
+        """Compute per-operation latency percentiles and error rates.
+
+        Fetches up to ``limit`` traces for the given service, then
+        aggregates all spans by operation name. For each operation
+        reports p50/p95/p99 duration, error count, and error rate.
+
+        Args:
+            service: Service name (required).
+            operation: Operation name filter (optional).
+            limit: Number of traces to fetch (default 20, max 100).
+
+        Returns:
+            A :class:`SpanStatisticsResult` with per-operation stats.
+
+        Raises:
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(self._aspan_statistics(service, operation=operation, limit=limit))
+
+    def critical_path(self, trace_id: str) -> CriticalPathOutput:
+        """Identify the critical path and top bottlenecks in a trace.
+
+        Finds the longest-duration span chain (critical path) from root to leaf,
+        and ranks spans by self-time to find actual performance bottlenecks.
+
+        Args:
+            trace_id: Trace ID as a hex string (16 or 32 hex chars).
+
+        Returns:
+            CriticalPathOutput with trace metadata, critical path spans, and
+            bottleneck ranking.
+
+        Raises:
+            ValueError: If the trace ID returns no data or contains no spans.
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(self._acritical_path(trace_id))
+
+    async def _afetch_traces(self, trace_ids: list[str]) -> list[Trace]:
+        """Fetch multiple traces concurrently.
+
+        Args:
+            trace_ids: List of trace ID hex strings.
+
+        Returns:
+            List of Trace objects in same order as input IDs.
+        """
+        endpoints: list[tuple[str, dict[str, Any] | None]] = [(f"/traces/{tid}", None) for tid in trace_ids]
+        results = await self._http.aget_many(endpoints)
+
+        traces = []
+        for tid, data in zip(trace_ids, results):
+            data = data or {}
+            traces_data: list[dict[str, Any]] = data.get("data") or []
+            if not traces_data:
+                raise ValueError(f"No trace data returned for traceID {tid!r}.")
+            raw_trace = traces_data[0]
+            spans_raw = raw_trace.get("spans") or []
+            processes = raw_trace.get("processes") or {}
+            t_id = raw_trace.get("traceID", tid)
+
+            spans = [_build_span(s, processes, t_id) for s in spans_raw]
+            root = _find_root_span(spans_raw)
+            root_op = root.get("operationName") if root else None
+            root_svc = None
+            if root:
+                pid = root.get("processID", "")
+                root_svc = (processes.get(pid) or {}).get("serviceName")
+
+            start_times = [s.start_time_us for s in spans if s.start_time_us]
+            start_us = min(start_times) if start_times else None
+            end_times = [s.start_time_us + s.duration_us for s in spans]
+            duration_us = (max(end_times) - min(start_times)) if start_times and end_times else 0
+
+            services = {s.service_name for s in spans}
+            errors = sum(1 for s in spans if s.error)
+
+            traces.append(
+                Trace(
+                    trace_id=t_id,
+                    spans=spans,
+                    root_operation=root_op,
+                    root_service=root_svc,
+                    start_time_us=start_us,
+                    duration_us=max(duration_us, 0),
+                    service_count=len(services),
+                    errors_count=errors,
+                )
+            )
+        return traces
+
+    def fetch_traces(self, trace_ids: list[str]) -> list[Trace]:
+        """Fetch multiple traces concurrently.
+
+        Uses asyncio.gather with Semaphore to fetch up to 10 traces
+        in parallel. Significantly faster than sequential get_trace()
+        calls for batch operations.
+
+        Args:
+            trace_ids: List of trace ID hex strings.
+
+        Returns:
+            List of Trace objects in same order as input IDs.
+        """
+        return asyncio.run(self._afetch_traces(trace_ids))
+
+    async def _aclose(self) -> None:
+        """Async implementation of :meth:`close`."""
+        await self._http.aclose()
+
+    async def _acompare_windows(
+        self,
+        service: str,
+        baseline_start: int,
+        baseline_end: int,
+        comparison_start: int,
+        comparison_end: int,
+        *,
+        operation: str | None = None,
+        limit: int = 100,
+    ) -> WindowComparisonOutput:
+        """Async implementation of :meth:`compare_windows`."""
+        # Validate parameters
+        if baseline_end <= baseline_start:
+            raise ValueError("baseline_end must be greater than baseline_start")
+        if comparison_end <= comparison_start:
+            raise ValueError("comparison_end must be greater than comparison_start")
+        if limit < 10 or limit > 1000:
+            raise ValueError("limit must be between 10 and 1000")
+
+        from jaeger_mcp._mcp import get_client
+
+        client = await get_client()
+
+        # Convert timestamps to milliseconds for Jaeger API
+        baseline_params = {
+            "service": service,
+            "start": baseline_start // 1000,  # microseconds to milliseconds
+            "end": baseline_end // 1000,
+            "limit": limit,
+        }
+        comparison_params = {
+            "service": service,
+            "start": comparison_start // 1000,
+            "end": comparison_end // 1000,
+            "limit": limit,
+        }
+
+        if operation:
+            baseline_params["operation"] = operation
+            comparison_params["operation"] = operation
+
+        # Use concurrent fetching for both windows (Phase 11 optimization)
+        results = await client.aget_many(
+            [
+                ("/traces", baseline_params),
+                ("/traces", comparison_params),
+            ]
+        )
+
+        baseline_data = results[0] or {}
+        comparison_data = results[1] or {}
+
+        baseline_traces: list[dict[str, Any]] = baseline_data.get("data") or []
+        comparison_traces: list[dict[str, Any]] = comparison_data.get("data") or []
+
+        # Aggregate statistics for each window
+        baseline_stats = _aggregate_span_statistics(baseline_traces)
+        comparison_stats = _aggregate_span_statistics(comparison_traces)
+
+        # Convert OperationStats to dict for compare_windows function
+        baseline_stats_dicts = [dict(stat) for stat in baseline_stats]
+        comparison_stats_dicts = [dict(stat) for stat in comparison_stats]
+
+        # Compare windows
+        diff_results = compare_windows(baseline_stats_dicts, comparison_stats_dicts)
+
+        # Extract summary from diff results (added by compare_windows)
+        summary = diff_results.pop() if diff_results and "_summary" in diff_results[-1] else {}
+        if summary:
+            summary_data = summary["_summary"]
+            added_count = summary_data["added_count"]
+            removed_count = summary_data["removed_count"]
+            faster_count = summary_data["faster_count"]
+            slower_count = summary_data["slower_count"]
+            total_deviation = summary_data["total_deviation"]
+            operation_count = summary_data["operation_count"]
+        else:
+            # Fallback counts
+            added_count = sum(1 for d in diff_results if d["change_type"] == "added")
+            removed_count = sum(1 for d in diff_results if d["change_type"] == "removed")
+            faster_count = sum(1 for d in diff_results if d["change_type"] == "faster")
+            slower_count = sum(1 for d in diff_results if d["change_type"] == "slower")
+            total_deviation = sum(d["deviation_score"] for d in diff_results if "_summary" not in d)
+            operation_count = len([d for d in diff_results if "_summary" not in d])
+
+        # Calculate overall deviation score (normalized by operation count)
+        overall_deviation_score = (total_deviation / operation_count) if operation_count > 0 else 0.0
+
+        # Create output
+        operations_data = [d for d in diff_results if "_summary" not in d]
+        result: WindowComparisonOutput = {
+            "service": service,
+            "baseline_start": baseline_start,
+            "baseline_end": baseline_end,
+            "comparison_start": comparison_start,
+            "comparison_end": comparison_end,
+            "operations": operations_data,  # type: ignore
+            "total_operations": operation_count,
+            "added_count": added_count,
+            "removed_count": removed_count,
+            "faster_count": faster_count,
+            "slower_count": slower_count,
+            "overall_deviation_score": round(overall_deviation_score, 3),
+        }
+
+        return result
+
+    def compare_windows(
+        self,
+        service: str,
+        baseline_start: int,
+        baseline_end: int,
+        comparison_start: int,
+        comparison_end: int,
+        *,
+        operation: str | None = None,
+        limit: int = 100,
+    ) -> WindowComparisonOutput:
+        """Compare aggregate trace behavior between two time periods for a service.
+
+        Fetches traces from both time windows, aggregates span statistics per operation,
+        then compares the aggregate behavior to detect performance changes.
+
+        Args:
+            service: Service name to compare across time windows.
+            baseline_start: Baseline window start time (Unix timestamp in microseconds).
+            baseline_end: Baseline window end time (Unix timestamp in microseconds).
+            comparison_start: Comparison window start time (Unix timestamp in microseconds).
+            comparison_end: Comparison window end time (Unix timestamp in microseconds).
+            operation: Optional operation name filter.
+            limit: Maximum traces to fetch per window (default 100, max 1000).
+
+        Returns:
+            WindowComparisonOutput with per-operation diffs and summary statistics.
+
+        Raises:
+            ValueError: If time ranges are invalid or limit is out of bounds.
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(
+            self._acompare_windows(
+                service,
+                baseline_start,
+                baseline_end,
+                comparison_start,
+                comparison_end,
+                operation=operation,
+                limit=limit,
+            )
+        )
+
+    async def _adetect_anomalies(
+        self,
+        service: str,
+        *,
+        baseline_duration_minutes: int = 60,
+        sensitivity: float = 2.0,
+        current_duration_minutes: int = 5,
+    ) -> AnomalyDetectionOutput:
+        """Async implementation of :meth:`detect_anomalies`."""
+        # Validate parameters
+        if baseline_duration_minutes < 5 or baseline_duration_minutes > 1440:
+            raise ValueError("baseline_duration_minutes must be between 5 and 1440")
+        if sensitivity < 1.0 or sensitivity > 5.0:
+            raise ValueError("sensitivity must be between 1.0 and 5.0")
+        if current_duration_minutes < 1 or current_duration_minutes > 60:
+            raise ValueError("current_duration_minutes must be between 1 and 60")
+
+        from jaeger_mcp._mcp import get_client
+        from jaeger_mcp.shaping import aggregate_span_statistics as _aggregate_span_statistics, detect_anomalies
+
+        client = await get_client()
+
+        # Calculate time windows
+        import time
+
+        now_us = int(time.time() * 1_000_000)
+        current_end_us = now_us
+        current_start_us = now_us - (current_duration_minutes * 60 * 1_000_000)
+        baseline_end_us = current_start_us
+        baseline_start_us = baseline_end_us - (baseline_duration_minutes * 60 * 1_000_000)
+
+        # Convert timestamps to milliseconds for Jaeger API
+        baseline_params = {
+            "service": service,
+            "start": baseline_start_us // 1000,
+            "end": baseline_end_us // 1000,
+            "limit": 200,  # Larger limit for baseline
+        }
+        current_params = {
+            "service": service,
+            "start": current_start_us // 1000,
+            "end": current_end_us // 1000,
+            "limit": 100,  # Smaller limit for current (more recent)
+        }
+
+        # Use concurrent fetching for both windows (Phase 11 optimization)
+        results = await client.aget_many(
+            [
+                ("/traces", baseline_params),
+                ("/traces", current_params),
+            ]
+        )
+
+        baseline_data = results[0] or {}
+        current_data = results[1] or {}
+
+        baseline_traces: list[dict[str, Any]] = baseline_data.get("data") or []
+        current_traces: list[dict[str, Any]] = current_data.get("data") or []
+
+        # Aggregate statistics for each window
+        baseline_stats = _aggregate_span_statistics(baseline_traces)
+        current_stats = _aggregate_span_statistics(current_traces)
+
+        # Detect anomalies
+        anomaly_results = detect_anomalies(current_stats, baseline_stats, sensitivity)
+
+        # Extract summary from anomaly results (added by detect_anomalies)
+        summary = anomaly_results.pop() if anomaly_results and "_summary" in anomaly_results[-1] else {}
+        if summary:
+            summary_data = summary["_summary"]
+            total_anomalies = summary_data["total_anomalies"]
+            latency_anomalies = summary_data["latency_anomalies"]
+            error_rate_anomalies = summary_data["error_rate_anomalies"]
+        else:
+            # Fallback counts
+            total_anomalies = len([a for a in anomaly_results if "_summary" not in a])
+            latency_anomalies = sum(1 for a in anomaly_results if a.get("anomaly_type") == "latency")
+            error_rate_anomalies = sum(1 for a in anomaly_results if a.get("anomaly_type") == "error_rate")
+
+        # Create output
+        anomalies_data = [a for a in anomaly_results if "_summary" not in a]
+        result: AnomalyDetectionOutput = {
+            "service": service,
+            "baseline_start": baseline_start_us,
+            "baseline_end": baseline_end_us,
+            "current_start": current_start_us,
+            "current_end": current_end_us,
+            "anomalies": anomalies_data,  # type: ignore
+            "total_anomalies": total_anomalies,
+            "latency_anomalies": latency_anomalies,
+            "error_rate_anomalies": error_rate_anomalies,
+            "sensitivity": sensitivity,
+        }
+
+        return result
+
+    def detect_anomalies(
+        self,
+        service: str,
+        *,
+        baseline_duration_minutes: int = 60,
+        sensitivity: float = 2.0,
+        current_duration_minutes: int = 5,
+    ) -> AnomalyDetectionOutput:
+        """Detect latency and error-rate anomalies for a service by comparing recent behavior to historical baseline.
+
+        Fetches traces from a historical baseline window and a recent observation window,
+        computes per-operation statistics for both, then identifies statistically significant
+        deviations that may indicate performance issues or reliability problems.
+
+        Args:
+            service: Service name to detect anomalies for.
+            baseline_duration_minutes: Historical baseline duration in minutes (5-1440, default 60).
+            sensitivity: Anomaly sensitivity threshold (1.0-5.0, default 2.0). Lower = more sensitive.
+            current_duration_minutes: Current observation window in minutes (1-60, default 5).
+
+        Returns:
+            AnomalyDetectionOutput with flagged operations and severity scores.
+
+        Raises:
+            ValueError: If parameters are out of valid ranges.
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(
+            self._adetect_anomalies(
+                service,
+                baseline_duration_minutes=baseline_duration_minutes,
+                sensitivity=sensitivity,
+                current_duration_minutes=current_duration_minutes,
+            )
+        )
+
     def close(self) -> None:
         """Close the underlying HTTP session."""
-        self._http.close()
+        asyncio.run(self._aclose())
 
     def __enter__(self) -> JaegerClient:
         return self

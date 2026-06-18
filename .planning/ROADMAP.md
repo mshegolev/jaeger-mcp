@@ -1,4 +1,6 @@
-# jaeger-mcp — Roadmap
+# jaeger-mcp — Roadmap (Historical)
+
+*This roadmap has been archived. See `.planning/milestones/` for shipped milestones.*
 
 ## Milestones
 
@@ -7,7 +9,7 @@
 - SHIPPED **M3: Release v0.2.0** — Phase 5 (shipped 2026-06-06)
 - SHIPPED **M4: Tech Debt Cleanup** — Phases 6-7 (shipped 2026-06-08)
 - SHIPPED **M5: Trace Analysis** — Phases 8-10 (shipped 2026-06-16)
-- [ ] **v0.4.0: Advanced Trace Analytics** — Phases 11-15
+- SHIPPED **v0.4.0: Advanced Trace Analytics** — Phases 11-15 (shipped 2026-06-18)
 
 ## Phases
 
@@ -53,11 +55,11 @@
 
 ### v0.4.0: Advanced Trace Analytics (Phases 11-15)
 
-- [ ] **Phase 11: Async Transport** — Migrate to async HTTP, concurrent fetching, streaming for scale
-- [ ] **Phase 12: Critical Path Analysis** — Longest-duration span chain and bottleneck ranking
-- [ ] **Phase 13: Batch Window Comparison** — Aggregate trace behavior diff between two time periods
-- [ ] **Phase 14: Anomaly Detection** — Statistical latency/error-rate spike detection per operation
-- [ ] **Phase 15: Release v0.4.0** — Version bump, changelog, README with 10 tools
+- [x] **Phase 11: Async Transport** — Migrate to async HTTP, concurrent fetching, streaming for scale
+- [x] **Phase 12: Critical Path Analysis** — Longest-duration span chain and bottleneck ranking
+- [x] **Phase 13: Batch Window Comparison** — Aggregate trace behavior diff between two time periods
+- [x] **Phase 14: Anomaly Detection** — Statistical latency/error-rate spike detection per operation
+- [x] **Phase 15: Release v0.4.0** — Version bump, changelog, README with 10 tools
 
 ## Phase Details
 
@@ -134,8 +136,8 @@ Plans:
 | 8. Trace Comparison | M5 | COMP-01..04 | Done | 2026-06-16 |
 | 9. Span Statistics | M5 | STAT-01..04 | Done | 2026-06-16 |
 | 10. Release v0.3.0 | M5 | REL-01..03 | Done | 2026-06-16 |
-| 11. Async Transport | v0.4.0 | ASYNC-01..04 | Not started | - |
-| 12. Critical Path Analysis | v0.4.0 | CRIT-01..04 | Not started | - |
-| 13. Batch Window Comparison | v0.4.0 | BATCH-01..05 | Not started | - |
-| 14. Anomaly Detection | v0.4.0 | ANOM-01..06 | Not started | - |
-| 15. Release v0.4.0 | v0.4.0 | REL-04..06 | Not started | - |
+| 11. Async Transport | v0.4.0 | ASYNC-01..04 | Done | 2026-06-16 |
+| 12. Critical Path Analysis | v0.4.0 | CRIT-01..04 | Done | 2026-06-16 |
+| 13. Batch Window Comparison | v0.4.0 | BATCH-01..05 | Done | 2026-06-18 |
+| 14. Anomaly Detection | v0.4.0 | ANOM-01..06 | Done | 2026-06-18 |
+| 15. Release v0.4.0 | v0.4.0 | REL-04..06 | Done | 2026-06-18 |

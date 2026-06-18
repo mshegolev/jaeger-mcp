@@ -1,0 +1,1129 @@
+openapi: 3.0.3
+info:
+  title: Jaeger MCP Tools API
+  description: |
+    This OpenAPI specification documents the MCP tools provided by the jaeger-mcp server.
+    
+    Note: The jaeger-mcp server communicates using the Model Context Protocol (MCP) over stdio,
+    not HTTP. This specification is provided for documentation purposes to describe the 
+    interface of each tool as if they were HTTP endpoints.
+    
+    The server provides 10 read-only tools for interacting with Jaeger distributed tracing data:
+    
+    1. `jaeger_list_services` - Discover which services Jaeger has seen
+    2. `jaeger_list_operations` - List operations for a service
+    3. `jaeger_search_traces` - Search traces with rich filters
+    4. `jaeger_get_trace` - Retrieve full trace with span tree
+    5. `jaeger_get_dependencies` - Service-to-service call graph
+    6. `jaeger_compare_traces` - Structural diff between two traces
+    7. `jaeger_span_statistics` - Per-operation latency and error stats
+    8. `jaeger_critical_path` - Longest-duration span chain and bottleneck ranking
+    9. `jaeger_compare_windows` - Aggregate trace behavior diff between time periods
+    10. `jaeger_detect_anomalies` - Statistical latency/error-rate spike detection
+    
+    All tools are read-only and carry `readOnlyHint: true` with zero risk of modifying trace data.
+  version: 0.4.0
+  contact:
+    name: Mikhail Shchegolev
+    email: mikhail.shchegolev@gmail.com
+  license:
+    name: MIT
+    url: https://github.com/mshegolev/jaeger-mcp/blob/main/LICENSE
+
+servers:
+  - url: mcp://localhost
+    description: |
+      MCP server running locally. Note that MCP uses stdio communication, 
+      not HTTP. This is a conceptual representation.
+
+paths:
+  /tools/list_services:
+    post:
+      summary: List all instrumented services
+      description: |
+        Discover which services Jaeger has observed. Returns all service names 
+        Jaeger has seen, capped at 500 services with a truncation hint.
+        
+        Corresponds to the `jaeger_list_services` MCP tool.
+      operationId: listServices
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                params:
+                  type: object
+                  description: No parameters required
+      responses:
+        '200':
+          description: Successful response with list of services
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServicesOutput'
+
+  /tools/list_operations:
+    post:
+      summary: List operations for a service
+      description: |
+        List operation names for a given service (e.g. HTTP route names, gRPC method names).
+        Use to discover valid operation names before filtering searches.
+        
+        Corresponds to the `jaeger_list_operations` MCP tool.
+      operationId: listOperations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - service
+              properties:
+                service:
+                  type: string
+                  description: Service name from list_services
+      responses:
+        '200':
+          description: Successful response with list of operations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationsOutput'
+
+  /tools/search_traces:
+    post:
+      summary: Search traces with rich filters
+      description: |
+        Search traces with service, operation, tags, time range, and duration filters.
+        Returns trace summaries with root span, duration, and service breakdown.
+        
+        Corresponds to the `jaeger_search_traces` MCP tool.
+      operationId: searchTraces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                service:
+                  type: string
+                  description: Service name to filter traces
+                operation:
+                  type: string
+                  description: Operation name to filter traces
+                tags:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Tag filters as key-value pairs
+                start_time:
+                  type: integer
+                  format: int64
+                  description: Start time in microseconds since Unix epoch
+                end_time:
+                  type: integer
+                  format: int64
+                  description: End time in microseconds since Unix epoch
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                  default: 20
+                  description: Maximum number of traces to return (max 100)
+      responses:
+        '200':
+          description: Successful response with trace summaries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchTracesOutput'
+
+  /tools/get_trace:
+    post:
+      summary: Retrieve full trace with span tree
+      description: |
+        Retrieve a full trace by ID with complete span tree, service breakdown,
+        and execution tree. For large traces (1000+ spans), response is streamed.
+        
+        Corresponds to the `jaeger_get_trace` MCP tool.
+      operationId: getTrace
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - trace_id
+              properties:
+                trace_id:
+                  type: string
+                  description: Hex-encoded trace ID
+      responses:
+        '200':
+          description: Successful response with full trace detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceDetailOutput'
+
+  /tools/get_dependencies:
+    post:
+      summary: Service-to-service call graph
+      description: |
+        Map service dependencies (call graph edges) over a time window.
+        Returns parent-child relationships with call counts.
+        
+        Corresponds to the `jaeger_get_dependencies` MCP tool.
+      operationId: getDependencies
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                start_time:
+                  type: integer
+                  format: int64
+                  description: Start time in microseconds since Unix epoch
+                end_time:
+                  type: integer
+                  format: int64
+                  description: End time in microseconds since Unix epoch
+      responses:
+        '200':
+          description: Successful response with dependency graph
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DependenciesOutput'
+
+  /tools/compare_traces:
+    post:
+      summary: Structural diff between two traces
+      description: |
+        Compare the span structure of two traces side-by-side. Matches spans by
+        (operationName, serviceName, parentOperation) tuple rather than span ID.
+        Reports added spans, removed spans, and changed spans with duration deltas.
+        
+        Corresponds to the `jaeger_compare_traces` MCP tool.
+      operationId: compareTraces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - baseline_trace_id
+                - comparison_trace_id
+              properties:
+                baseline_trace_id:
+                  type: string
+                  description: Hex-encoded baseline trace ID
+                comparison_trace_id:
+                  type: string
+                  description: Hex-encoded comparison trace ID
+      responses:
+        '200':
+          description: Successful response with trace comparison
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompareTracesOutput'
+
+  /tools/span_statistics:
+    post:
+      summary: Per-operation latency and error stats
+      description: |
+        Compute per-operation latency percentiles (p50/p95/p99) and error rates
+        across recent traces for a service. Fetches up to limit traces (default 20, max 100).
+        
+        Corresponds to the `jaeger_span_statistics` MCP tool.
+      operationId: spanStatistics
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - service
+              properties:
+                service:
+                  type: string
+                  description: Service name to analyze
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                  default: 20
+                  description: Maximum number of traces to analyze (max 100)
+      responses:
+        '200':
+          description: Successful response with span statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpanStatisticsOutput'
+
+  /tools/critical_path:
+    post:
+      summary: Longest-duration span chain and bottleneck ranking
+      description: |
+        Identify the longest-duration span chain (critical path) from root to leaf
+        in a trace and rank spans by self-time to find performance bottlenecks.
+        
+        Corresponds to the `jaeger_critical_path` MCP tool.
+      operationId: criticalPath
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - trace_id
+              properties:
+                trace_id:
+                  type: string
+                  description: Hex-encoded trace ID
+      responses:
+        '200':
+          description: Successful response with critical path analysis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CriticalPathOutput'
+
+  /tools/compare_windows:
+    post:
+      summary: Aggregate trace behavior diff between time periods
+      description: |
+        Compare aggregate trace behavior between two time periods for a service
+        to detect performance regressions or improvements across deployments.
+        
+        Corresponds to the `jaeger_compare_windows` MCP tool.
+      operationId: compareWindows
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - service
+                - baseline_start
+                - baseline_end
+                - comparison_start
+                - comparison_end
+              properties:
+                service:
+                  type: string
+                  description: Service name to compare
+                baseline_start:
+                  type: integer
+                  format: int64
+                  description: Baseline window start time (microseconds since Unix epoch)
+                baseline_end:
+                  type: integer
+                  format: int64
+                  description: Baseline window end time (microseconds since Unix epoch)
+                comparison_start:
+                  type: integer
+                  format: int64
+                  description: Comparison window start time (microseconds since Unix epoch)
+                comparison_end:
+                  type: integer
+                  format: int64
+                  description: Comparison window end time (microseconds since Unix epoch)
+                operation:
+                  type: string
+                  description: Optional operation name filter
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  default: 100
+                  description: Maximum traces to fetch per window (max 1000)
+      responses:
+        '200':
+          description: Successful response with window comparison
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WindowComparisonOutput'
+
+  /tools/detect_anomalies:
+    post:
+      summary: Statistical latency/error-rate spike detection
+      description: |
+        Scan a service's recent traces and get flagged operations with statistically
+        significant latency spikes or error-rate increases.
+        
+        Corresponds to the `jaeger_detect_anomalies` MCP tool.
+      operationId: detectAnomalies
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - service
+              properties:
+                service:
+                  type: string
+                  description: Service name to analyze
+                baseline_duration_minutes:
+                  type: integer
+                  minimum: 5
+                  maximum: 1440
+                  default: 60
+                  description: Historical baseline duration in minutes (5-1440)
+                sensitivity:
+                  type: number
+                  format: float
+                  minimum: 1.0
+                  maximum: 5.0
+                  default: 2.0
+                  description: Anomaly sensitivity threshold (1.0-5.0)
+                current_duration_minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 60
+                  default: 5
+                  description: Current observation window in minutes (1-60)
+      responses:
+        '200':
+          description: Successful response with anomaly detection results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnomalyDetectionOutput'
+
+components:
+  schemas:
+    ServicesOutput:
+      type: object
+      properties:
+        services_count:
+          type: integer
+          description: Number of services returned
+        truncated:
+          type: boolean
+          description: Whether the result was truncated (more than 500 services exist)
+        services:
+          type: array
+          items:
+            type: string
+          description: List of service names (sorted alphabetically)
+      required:
+        - services_count
+        - truncated
+        - services
+
+    OperationsOutput:
+      type: object
+      properties:
+        service:
+          type: string
+          description: Service name
+        operations_count:
+          type: integer
+          description: Number of operations returned
+        truncated:
+          type: boolean
+          description: Whether the result was truncated (more than 500 operations exist)
+        operations:
+          type: array
+          items:
+            type: string
+          description: List of operation names (sorted alphabetically)
+      required:
+        - service
+        - operations_count
+        - truncated
+        - operations
+
+    SearchTracesOutput:
+      type: object
+      properties:
+        traces_matched:
+          type: integer
+          description: Number of traces matched by the search
+        traces_shown:
+          type: integer
+          description: Number of traces returned
+        traces:
+          type: array
+          items:
+            $ref: '#/components/schemas/TraceSummary'
+      required:
+        - traces_matched
+        - traces_shown
+        - traces
+
+    TraceSummary:
+      type: object
+      properties:
+        trace_id:
+          type: string
+          description: Hex-encoded trace ID
+        start_time:
+          type: integer
+          format: int64
+          description: Start time in microseconds since Unix epoch
+        duration_us:
+          type: integer
+          format: int64
+          description: Total trace duration in microseconds
+        service_count:
+          type: integer
+          description: Number of distinct services in the trace
+        services:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Service name to span count mapping
+        root_service:
+          type: string
+          description: Root service name
+        root_operation:
+          type: string
+          description: Root operation name
+      required:
+        - trace_id
+        - start_time
+        - duration_us
+        - service_count
+        - services
+        - root_service
+        - root_operation
+
+    TraceDetailOutput:
+      type: object
+      properties:
+        trace_id:
+          type: string
+          description: Hex-encoded trace ID
+        start_time:
+          type: integer
+          format: int64
+          description: Start time in microseconds since Unix epoch
+        duration_us:
+          type: integer
+          format: int64
+          description: Total trace duration in microseconds
+        service_count:
+          type: integer
+          description: Number of distinct services in the trace
+        services:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Service name to span count mapping
+        root_service:
+          type: string
+          description: Root service name
+        root_operation:
+          type: string
+          description: Root operation name
+        spans:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpanDetail'
+        execution_tree:
+          $ref: '#/components/schemas/SpanTreeNode'
+      required:
+        - trace_id
+        - start_time
+        - duration_us
+        - service_count
+        - services
+        - root_service
+        - root_operation
+        - spans
+        - execution_tree
+
+    SpanDetail:
+      type: object
+      properties:
+        span_id:
+          type: string
+          description: Hex-encoded span ID
+        operation:
+          type: string
+          description: Operation name
+        service:
+          type: string
+          description: Service name
+        start_time:
+          type: integer
+          format: int64
+          description: Start time in microseconds since Unix epoch
+        duration_us:
+          type: integer
+          format: int64
+          description: Span duration in microseconds
+        has_error:
+          type: boolean
+          description: Whether the span has an error
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+          description: Span tags as key-value pairs
+      required:
+        - span_id
+        - operation
+        - service
+        - start_time
+        - duration_us
+        - has_error
+        - tags
+
+    SpanTreeNode:
+      type: object
+      properties:
+        span_id:
+          type: string
+          description: Hex-encoded span ID
+        operation:
+          type: string
+          description: Operation name
+        service:
+          type: string
+          description: Service name
+        duration_us:
+          type: integer
+          format: int64
+          description: Span duration in microseconds
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpanTreeNode'
+          description: Child spans in the execution tree
+      required:
+        - span_id
+        - operation
+        - service
+        - duration_us
+        - children
+
+    DependenciesOutput:
+      type: object
+      properties:
+        start_time:
+          type: integer
+          format: int64
+          description: Start time in microseconds since Unix epoch
+        end_time:
+          type: integer
+          format: int64
+          description: End time in microseconds since Unix epoch
+        dependencies:
+          type: array
+          items:
+            $ref: '#/components/schemas/DependencyEdge'
+      required:
+        - start_time
+        - end_time
+        - dependencies
+
+    DependencyEdge:
+      type: object
+      properties:
+        parent:
+          type: string
+          description: Parent service name
+        child:
+          type: string
+          description: Child service name
+        call_count:
+          type: integer
+          format: int64
+          description: Number of calls from parent to child
+      required:
+        - parent
+        - child
+        - call_count
+
+    CompareTracesOutput:
+      type: object
+      properties:
+        baseline_trace_id:
+          type: string
+          description: Hex-encoded baseline trace ID
+        comparison_trace_id:
+          type: string
+          description: Hex-encoded comparison trace ID
+        added_spans:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpanIdentity'
+          description: Spans present in comparison but not baseline
+        removed_spans:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpanIdentity'
+          description: Spans present in baseline but not comparison
+        changed_spans:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpanChange'
+          description: Spans present in both with differences
+        unchanged_count:
+          type: integer
+          description: Number of spans present in both with no differences
+      required:
+        - baseline_trace_id
+        - comparison_trace_id
+        - added_spans
+        - removed_spans
+        - changed_spans
+        - unchanged_count
+
+    SpanIdentity:
+      type: object
+      properties:
+        span_id:
+          type: string
+          description: Hex-encoded span ID (if available)
+        operation:
+          type: string
+          description: Operation name
+        service:
+          type: string
+          description: Service name
+        parent_operation:
+          type: string
+          description: Parent operation name
+      required:
+        - operation
+        - service
+        - parent_operation
+
+    SpanChange:
+      type: object
+      properties:
+        identity:
+          $ref: '#/components/schemas/SpanIdentity'
+        duration_delta_us:
+          type: integer
+          format: int64
+          description: Duration difference in microseconds (comparison - baseline)
+        duration_delta_pct:
+          type: number
+          format: float
+          description: Duration percentage difference
+        tags_added:
+          type: array
+          items:
+            type: string
+          description: Tag keys added in comparison
+        tags_removed:
+          type: array
+          items:
+            type: string
+          description: Tag keys removed in comparison
+        tags_changed:
+          type: array
+          items:
+            type: string
+          description: Tag keys with different values
+      required:
+        - identity
+        - duration_delta_us
+        - duration_delta_pct
+        - tags_added
+        - tags_removed
+        - tags_changed
+
+    SpanStatisticsOutput:
+      type: object
+      properties:
+        service:
+          type: string
+          description: Service name
+        trace_count:
+          type: integer
+          description: Number of traces analyzed
+        stats:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperationStats'
+      required:
+        - service
+        - trace_count
+        - stats
+
+    OperationStats:
+      type: object
+      properties:
+        operation:
+          type: string
+          description: Operation name
+        count:
+          type: integer
+          description: Number of spans for this operation
+        p50_duration_us:
+          type: integer
+          format: int64
+          description: 50th percentile duration in microseconds
+        p95_duration_us:
+          type: integer
+          format: int64
+          description: 95th percentile duration in microseconds
+        p99_duration_us:
+          type: integer
+          format: int64
+          description: 99th percentile duration in microseconds
+        error_count:
+          type: integer
+          description: Number of spans with errors
+        error_rate:
+          type: number
+          format: float
+          description: Error rate (error_count / count)
+      required:
+        - operation
+        - count
+        - p50_duration_us
+        - p95_duration_us
+        - p99_duration_us
+        - error_count
+        - error_rate
+
+    CriticalPathOutput:
+      type: object
+      properties:
+        trace_id:
+          type: string
+          description: Hex-encoded trace ID
+        root_operation:
+          type: string
+          description: Root operation name (if available)
+        total_duration_us:
+          type: integer
+          format: int64
+          description: Total trace duration in microseconds
+        critical_path:
+          type: array
+          items:
+            $ref: '#/components/schemas/CriticalPathSpan'
+          description: Spans on the critical path (longest duration chain)
+        critical_path_duration_us:
+          type: integer
+          format: int64
+          description: Duration of the critical path in microseconds
+        critical_path_percentage:
+          type: number
+          format: float
+          description: Percentage of total duration on critical path
+        bottlenecks:
+          type: array
+          items:
+            $ref: '#/components/schemas/BottleneckSpan'
+          description: Spans ranked by self-time (exclusive duration)
+        bottleneck_count:
+          type: integer
+          description: Number of bottleneck spans returned
+      required:
+        - trace_id
+        - total_duration_us
+        - critical_path
+        - critical_path_duration_us
+        - critical_path_percentage
+        - bottlenecks
+        - bottleneck_count
+
+    CriticalPathSpan:
+      type: object
+      properties:
+        span_id:
+          type: string
+          description: Hex-encoded span ID
+        operation:
+          type: string
+          description: Operation name
+        service:
+          type: string
+          description: Service name
+        duration_us:
+          type: integer
+          format: int64
+          description: Span duration in microseconds
+        cumulative_duration_us:
+          type: integer
+          format: int64
+          description: Cumulative duration from root to this span
+        percentage_of_total:
+          type: number
+          format: float
+          description: Percentage of total trace duration
+      required:
+        - span_id
+        - operation
+        - service
+        - duration_us
+        - cumulative_duration_us
+        - percentage_of_total
+
+    BottleneckSpan:
+      type: object
+      properties:
+        span_id:
+          type: string
+          description: Hex-encoded span ID
+        operation:
+          type: string
+          description: Operation name
+        service:
+          type: string
+          description: Service name
+        duration_us:
+          type: integer
+          format: int64
+          description: Span duration in microseconds
+        self_time_us:
+          type: integer
+          format: int64
+          description: Self time (exclusive duration) in microseconds
+        self_time_percentage:
+          type: number
+          format: float
+          description: Percentage of total trace duration as self time
+      required:
+        - span_id
+        - operation
+        - service
+        - duration_us
+        - self_time_us
+        - self_time_percentage
+
+    WindowComparisonOutput:
+      type: object
+      properties:
+        service:
+          type: string
+          description: Service name
+        baseline_start:
+          type: integer
+          format: int64
+          description: Baseline window start time (microseconds since Unix epoch)
+        baseline_end:
+          type: integer
+          format: int64
+          description: Baseline window end time (microseconds since Unix epoch)
+        comparison_start:
+          type: integer
+          format: int64
+          description: Comparison window start time (microseconds since Unix epoch)
+        comparison_end:
+          type: integer
+          format: int64
+          description: Comparison window end time (microseconds since Unix epoch)
+        operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperationDiff'
+          description: Per-operation differences between windows
+        total_operations:
+          type: integer
+          description: Total number of operations compared
+        added_count:
+          type: integer
+          description: Number of operations added in comparison window
+        removed_count:
+          type: integer
+          description: Number of operations removed in comparison window
+        faster_count:
+          type: integer
+          description: Number of operations that became faster
+        slower_count:
+          type: integer
+          description: Number of operations that became slower
+        overall_deviation_score:
+          type: number
+          format: float
+          description: Overall deviation score (0.0 to 10.0+)
+      required:
+        - service
+        - baseline_start
+        - baseline_end
+        - comparison_start
+        - comparison_end
+        - operations
+        - total_operations
+        - added_count
+        - removed_count
+        - faster_count
+        - slower_count
+        - overall_deviation_score
+
+    OperationDiff:
+      type: object
+      properties:
+        operation:
+          type: string
+          description: Operation name
+        change_type:
+          type: string
+          enum: [added, removed, faster, slower, unchanged]
+          description: Type of change
+        count_baseline:
+          type: integer
+          description: Span count in baseline window
+        count_comparison:
+          type: integer
+          description: Span count in comparison window
+        count_delta:
+          type: integer
+          description: Count difference (comparison - baseline)
+        p95_baseline_us:
+          type: integer
+          format: int64
+          description: 95th percentile latency in baseline window (microseconds)
+        p95_comparison_us:
+          type: integer
+          format: int64
+          description: 95th percentile latency in comparison window (microseconds)
+        p95_delta_us:
+          type: integer
+          format: int64
+          description: p95 latency difference (microseconds)
+        p95_delta_pct:
+          type: number
+          format: float
+          description: p95 latency percentage difference
+        error_rate_baseline:
+          type: number
+          format: float
+          description: Error rate in baseline window
+        error_rate_comparison:
+          type: number
+          format: float
+          description: Error rate in comparison window
+        error_rate_delta:
+          type: number
+          format: float
+          description: Error rate difference (comparison - baseline)
+        deviation_score:
+          type: number
+          format: float
+          description: Deviation score for this operation (0.0 to 10.0+)
+      required:
+        - operation
+        - change_type
+        - count_baseline
+        - count_comparison
+        - count_delta
+        - p95_baseline_us
+        - p95_comparison_us
+        - p95_delta_us
+        - p95_delta_pct
+        - error_rate_baseline
+        - error_rate_comparison
+        - error_rate_delta
+        - deviation_score
+
+    AnomalyDetectionOutput:
+      type: object
+      properties:
+        service:
+          type: string
+          description: Service name
+        baseline_start:
+          type: integer
+          format: int64
+          description: Baseline window start time (microseconds since Unix epoch)
+        baseline_end:
+          type: integer
+          format: int64
+          description: Baseline window end time (microseconds since Unix epoch)
+        current_start:
+          type: integer
+          format: int64
+          description: Current window start time (microseconds since Unix epoch)
+        current_end:
+          type: integer
+          format: int64
+          description: Current window end time (microseconds since Unix epoch)
+        anomalies:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperationAnomaly'
+          description: Flagged operations with anomalies
+        total_anomalies:
+          type: integer
+          description: Total number of anomalies detected
+        latency_anomalies:
+          type: integer
+          description: Number of latency anomalies detected
+        error_rate_anomalies:
+          type: integer
+          description: Number of error rate anomalies detected
+        sensitivity:
+          type: number
+          format: float
+          description: Sensitivity threshold used (1.0-5.0)
+      required:
+        - service
+        - baseline_start
+        - baseline_end
+        - current_start
+        - current_end
+        - anomalies
+        - total_anomalies
+        - latency_anomalies
+        - error_rate_anomalies
+        - sensitivity
+
+    OperationAnomaly:
+      type: object
+      properties:
+        operation:
+          type: string
+          description: Operation name
+        anomaly_type:
+          type: string
+          enum: [latency, error_rate]
+          description: Type of anomaly detected
+        baseline_stat:
+          type: string
+          description: Baseline statistic that triggered anomaly (e.g., p95_duration_us)
+        baseline_value:
+          type: number
+          format: float
+          description: Baseline value for the statistic
+        current_value:
+          type: number
+          format: float
+          description: Current value for the statistic
+        z_score:
+          type: number
+          format: float
+          description: Z-score indicating significance of difference
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Severity classification
+        trace_count:
+          type: integer
+          description: Number of traces analyzed for this operation
+      required:
+        - operation
+        - anomaly_type
+        - baseline_stat
+        - baseline_value
+        - current_value
+        - z_score
+        - severity
+        - trace_count
+
+  securitySchemes:
+    none:
+      type: http
+      scheme: none
+      description: |
+        The jaeger-mcp server uses the Model Context Protocol over stdio,
+        not HTTP. No authentication is required as it runs locally as a subprocess.
+
+security:
+  - none: []

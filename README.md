@@ -15,10 +15,11 @@ Give Claude (or any MCP-capable agent) read access to your trace data — search
 The existing Jaeger integrations require a running UI or custom scripts. This server:
 
 - Speaks the standard [Model Context Protocol](https://modelcontextprotocol.io/) over **stdio** — works with Claude Desktop, Claude Code, Cursor, and any MCP client.
-- Is **read-only**: all 7 tools carry `readOnlyHint: true` — zero risk of modifying trace data.
+- Is **read-only**: all 10 tools carry `readOnlyHint: true` — zero risk of modifying trace data.
 - Returns **dual-channel output**: structured JSON (`structuredContent`) for programmatic use + Markdown (`content`) for human-readable display.
 - Has **actionable error messages** that name the exact env var to fix and suggest a next step.
 - Supports **Bearer token**, **HTTP Basic auth**, or **no auth** (common for internal deployments).
+- Includes **OpenAPI specification** documenting the underlying Jaeger Query API (`openapi.yaml`).
 
 ## Tools
 
@@ -31,6 +32,9 @@ The existing Jaeger integrations require a running UI or custom scripts. This se
 | `jaeger_get_dependencies` | `GET /api/dependencies` | Service-to-service call graph |
 | `jaeger_compare_traces` | `GET /api/traces/{traceID}` ×2 | Structural diff between two traces |
 | `jaeger_span_statistics` | `GET /api/traces` | Per-operation latency and error stats |
+| `jaeger_critical_path` | `GET /api/traces/{traceID}` | Longest-duration span chain and bottleneck ranking |
+| `jaeger_compare_windows` | `GET /api/traces` ×2 | Aggregate trace behavior diff between two time periods |
+| `jaeger_detect_anomalies` | `GET /api/traces` ×2 | Statistical latency/error-rate spike detection per operation |
 
 ## Installation
 
@@ -172,6 +176,38 @@ Per-operation latency percentiles and error rates. Fetches up to `limit` traces 
 
 Use to find the slowest or most error-prone operations in a service.
 
+### `jaeger_critical_path`
+
+Identifies the longest-duration span chain from root to leaf in a trace (the critical path) and ranks spans by self-time to find performance bottlenecks. 
+
+Reports:
+- Critical path spans with operation, service, duration, and percentage-of-total
+- Bottleneck spans ranked by exclusive duration (self-time)
+
+Use to answer "Why is this trace so slow?" and "Which operations consume the most CPU/self-time?"
+
+### `jaeger_compare_windows`
+
+Compares aggregate trace behavior between two time periods for a service to detect performance regressions or improvements across deployments.
+
+Reports:
+- Per-operation diff summary showing added, removed, faster, slower operations
+- Deviation scoring with numeric scores per operation and overall
+- Latency percentile changes (p50, p95) and error rate deltas
+
+Use to answer "Did our latest deployment affect performance?" and "Which operations got slower after the database upgrade?"
+
+### `jaeger_detect_anomalies`
+
+Scans for statistically significant latency spikes or error-rate increases in a service's recent traces compared to historical baselines.
+
+Reports:
+- Flagged operations with anomaly type (latency or error_rate)
+- Severity classification (low to critical) with z-scores
+- Current vs baseline values for affected metrics
+
+Use to proactively identify performance degradations and reliability issues before they impact users.
+
 ## Library facade (in-process use)
 
 `jaeger-mcp` can also be used as a Python library without an MCP server:
@@ -188,9 +224,24 @@ for span in trace.spans:
         print(f"  tags: {span.tags}")
 ```
 
-Available methods: `get_trace()`, `search_traces()`, `list_services()`, `get_dependencies()`, `compare_traces()`, `span_statistics()`.
+Available methods: `get_trace()`, `search_traces()`, `list_services()`, `get_dependencies()`, `compare_traces()`, `span_statistics()`, `critical_path()`, `compare_windows()`, `detect_anomalies()`.
 
-Domain objects: `Span`, `Trace`, `TraceSummary`, `ServiceDep`, `TraceComparison`, `SpanIdentity`, `SpanChange`, `SpanStatisticsResult`, `OperationStatResult` — all with typed fields.
+Domain objects: `Span`, `Trace`, `TraceSummary`, `ServiceDep`, `TraceComparison`, `SpanIdentity`, `SpanChange`, `SpanStatisticsResult`, `OperationStatResult`, `CriticalPathOutput`, `CriticalPathSpan`, `BottleneckSpan`, `WindowComparisonOutput`, `OperationDiff`, `AnomalyDetectionOutput`, `OperationAnomaly` — all with typed fields.
+
+## API Documentation
+
+This project includes comprehensive OpenAPI specifications in the `docs/` directory:
+
+1. **Jaeger Query Service API** (`openapi.yaml`) - Documents the actual Jaeger API endpoints
+2. **MCP Tools API** (`docs/mcp-tools-openapi.yaml`) - Documents the MCP tools as conceptual HTTP endpoints
+
+These specifications are useful for:
+- Understanding the underlying API calls made by each tool
+- Developing alternative integrations
+- Debugging API interactions
+- Generating client libraries or documentation
+
+See `docs/README.md` for more details on both specifications.
 
 ## Performance characteristics
 

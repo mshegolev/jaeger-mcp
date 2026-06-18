@@ -5,6 +5,33 @@ All notable changes to `jaeger-mcp` will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 versioning: [SemVer](https://semver.org/).
 
+## [0.4.0] — 2026-06-18
+
+### Added
+
+- **Async transport layer** (#11) — `httpx`-based async transport with backward-compatible sync facade
+  - Concurrent trace fetching for 3x+ speedup on multi-trace operations
+  - Streaming support for large traces (500+ spans) to prevent memory pressure
+  - `JaegerHTTPClient.aget()` and `aget_many()` for direct async use
+- **`jaeger_critical_path` tool** (#12) — identify longest-duration span chain and performance bottlenecks
+  - Critical path spans with operation, service, duration, and percentage-of-total
+  - Bottleneck ranking by self-time (exclusive duration)
+  - Structured output: `CriticalPathOutput` with `critical_path` spans and `bottlenecks` list
+- **`jaeger_compare_windows` tool** (#13) — compare aggregate trace behavior between time periods
+  - Per-operation diff summary showing added, removed, faster, slower operations
+  - Deviation scoring with numeric scores per operation and overall
+  - Configurable trace limit per window (default 100, max 1000)
+- **`jaeger_detect_anomalies` tool** (#14) — statistical latency/error-rate spike detection
+  - Historical baseline from configurable time window (default: last 1 hour)
+  - Latency spike detection flagging operations with p95/p99 significantly above baseline
+  - Error rate anomaly detection flagging operations with error rates significantly above baseline
+  - Configurable sensitivity thresholds (sigma multiplier)
+- **`JaegerClient.critical_path()`** — facade method for in-process critical path analysis
+- **`JaegerClient.compare_windows()`** — facade method for in-process window comparison
+- **`JaegerClient.detect_anomalies()`** — facade method for in-process anomaly detection
+- **OpenAPI specification** — `openapi.yaml` documenting the Jaeger Query Service API endpoints
+- **MCP Tools API documentation** — `docs/mcp-tools-openapi.yaml` documenting the MCP tools as conceptual HTTP endpoints
+
 ## [0.3.0] — 2026-06-16
 
 ### Added

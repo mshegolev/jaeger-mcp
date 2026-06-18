@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-import responses
+import respx
 from mcp.server.fastmcp.exceptions import ToolError
 
 from jaeger_mcp import output
@@ -84,11 +85,11 @@ class TestShutdownLogging:
     async def test_shutdown_logs_close_exception(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """If _client.close() raises, the exception is logged as WARNING."""
+        """If _client.aclose() raises, the exception is logged as WARNING."""
         import jaeger_mcp._mcp as mcp_mod
 
         mock_client = MagicMock()
-        mock_client.close.side_effect = RuntimeError("close failed")
+        mock_client.aclose = AsyncMock(side_effect=RuntimeError("close failed"))
 
         # Run the lifespan context manager with a mock app
         mock_app = MagicMock()
@@ -98,8 +99,8 @@ class TestShutdownLogging:
             async with mcp_mod.app_lifespan(mock_app) as ctx:
                 pass  # simulate normal server run
 
-        # The close() was called and the exception was logged (not raised)
-        mock_client.close.assert_called_once()
+        # The aclose() was called and the exception was logged (not raised)
+        mock_client.aclose.assert_called_once()
         assert any("error closing HTTP client" in r.message for r in caplog.records)
 
 
@@ -107,18 +108,15 @@ class TestShutdownLogging:
 
 
 class TestEmptyResponseBody:
-    @responses.activate
-    def test_empty_body_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @respx.mock
+    async def test_empty_body_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
-        responses.add(
-            responses.GET,
-            "https://jaeger.example.com/api/services",
-            body=b"",
-            status=200,
+        respx.get("https://jaeger.example.com/api/services").mock(
+            return_value=httpx.Response(200, content=b""),
         )
         client = JaegerHTTPClient(retry_attempts=0, cache_ttl=0)
         try:
-            result = client.get("/services")
+            result = await client.aget("/services")
             assert result is None
         finally:
-            client.close()
+            await client.aclose()

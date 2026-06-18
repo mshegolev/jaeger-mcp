@@ -14,7 +14,7 @@ Jaeger instance is required.  They verify:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -89,10 +89,12 @@ def _make_jaeger_trace_response(
 
 
 def _make_mock_http_client() -> MagicMock:
-    """Create a mock JaegerHTTPClient."""
+    """Create a mock JaegerHTTPClient with async methods."""
     mock = MagicMock()
-    mock.get.return_value = _make_jaeger_trace_response()
-    mock.close.return_value = None
+    mock.aget = AsyncMock(return_value=_make_jaeger_trace_response())
+    mock.aget_stream = AsyncMock(return_value=_make_jaeger_trace_response())
+    mock.aget_many = AsyncMock(return_value=[_make_jaeger_trace_response(), _make_jaeger_trace_response()])
+    mock.aclose = AsyncMock()
     return mock
 
 
@@ -224,14 +226,14 @@ class TestGetTrace:
 
     def test_no_trace_data_raises_valueerror(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = {"data": []}
+        mock_http.aget_stream = AsyncMock(return_value={"data": []})
         client = JaegerClient(mock_http)
         with pytest.raises(ValueError, match="No trace data"):
             client.get_trace("nonexistent")
 
     def test_trace_with_no_errors(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = _make_jaeger_trace_response(error_span=False)
+        mock_http.aget_stream = AsyncMock(return_value=_make_jaeger_trace_response(error_span=False))
         client = JaegerClient(mock_http)
         trace = client.get_trace("abc123def456abc123def456abc12345")
         assert trace.errors_count == 0
@@ -253,25 +255,27 @@ class TestGetTrace:
 class TestSearchTraces:
     def test_returns_summaries(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = {
-            "data": [
-                {
-                    "traceID": "t1",
-                    "spans": [
-                        {
-                            "spanID": "s1",
-                            "operationName": "op",
-                            "processID": "p1",
-                            "startTime": 1_700_000_000_000_000,
-                            "duration": 100_000,
-                            "references": [],
-                            "tags": [],
-                        }
-                    ],
-                    "processes": {"p1": {"serviceName": "svc"}},
-                }
-            ]
-        }
+        mock_http.aget = AsyncMock(
+            return_value={
+                "data": [
+                    {
+                        "traceID": "t1",
+                        "spans": [
+                            {
+                                "spanID": "s1",
+                                "operationName": "op",
+                                "processID": "p1",
+                                "startTime": 1_700_000_000_000_000,
+                                "duration": 100_000,
+                                "references": [],
+                                "tags": [],
+                            }
+                        ],
+                        "processes": {"p1": {"serviceName": "svc"}},
+                    }
+                ]
+            }
+        )
         client = JaegerClient(mock_http)
         results = client.search_traces("svc")
         assert len(results) == 1
@@ -282,7 +286,7 @@ class TestSearchTraces:
 
     def test_passes_filters_to_http(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = {"data": []}
+        mock_http.aget = AsyncMock(return_value={"data": []})
         client = JaegerClient(mock_http)
         client.search_traces(
             "svc",
@@ -294,7 +298,7 @@ class TestSearchTraces:
             time_to=200,
             limit=5,
         )
-        call_args = mock_http.get.call_args
+        call_args = mock_http.aget.call_args
         params = call_args[1].get("params") or call_args[0][1] if len(call_args[0]) > 1 else call_args[1]["params"]
         assert params["service"] == "svc"
         assert params["operation"] == "GET /api"
@@ -312,7 +316,7 @@ class TestSearchTraces:
 class TestListServices:
     def test_returns_sorted(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = {"data": ["z-service", "a-service", "m-service"]}
+        mock_http.aget = AsyncMock(return_value={"data": ["z-service", "a-service", "m-service"]})
         client = JaegerClient(mock_http)
         result = client.list_services()
         assert result == ["a-service", "m-service", "z-service"]
@@ -324,12 +328,14 @@ class TestListServices:
 class TestGetDependencies:
     def test_returns_service_deps(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = {
-            "data": [
-                {"parent": "frontend", "child": "api", "callCount": 100},
-                {"parent": "api", "child": "db", "callCount": 50},
-            ]
-        }
+        mock_http.aget = AsyncMock(
+            return_value={
+                "data": [
+                    {"parent": "frontend", "child": "api", "callCount": 100},
+                    {"parent": "api", "child": "db", "callCount": 50},
+                ]
+            }
+        )
         client = JaegerClient(mock_http)
         deps = client.get_dependencies(lookback_hours=12)
         assert len(deps) == 2
@@ -346,9 +352,10 @@ class TestGetDependencies:
 class TestContextManager:
     def test_closes_on_exit(self) -> None:
         mock_http = MagicMock()
+        mock_http.aclose = AsyncMock()
         with JaegerClient(mock_http) as client:
             assert client is not None
-        mock_http.close.assert_called_once()
+        mock_http.aclose.assert_called_once()
 
 
 # ── compare_traces ────────────────────────────────────────────────────────
@@ -404,7 +411,7 @@ class TestCompareTraces:
         mock_http = MagicMock()
         resp_a = _make_comparison_response("aaa111", child_duration=200_000)
         resp_b = _make_comparison_response("bbb222", child_duration=300_000)
-        mock_http.get.side_effect = [resp_a, resp_b]
+        mock_http.aget_many = AsyncMock(return_value=[resp_a, resp_b])
         client = JaegerClient(mock_http)
         result = client.compare_traces("aaa111", "bbb222")
 
@@ -421,7 +428,7 @@ class TestCompareTraces:
         mock_http = MagicMock()
         resp_a = _make_comparison_response("aaa111")
         resp_b = _make_comparison_response("bbb222")
-        mock_http.get.side_effect = [resp_a, resp_b]
+        mock_http.aget_many = AsyncMock(return_value=[resp_a, resp_b])
         client = JaegerClient(mock_http)
         result = client.compare_traces("aaa111", "bbb222")
 
@@ -433,7 +440,7 @@ class TestCompareTraces:
     def test_compare_traces_empty_trace_raises(self) -> None:
         """Empty data for trace A → raises ValueError."""
         mock_http = MagicMock()
-        mock_http.get.return_value = {"data": []}
+        mock_http.aget_many = AsyncMock(return_value=[{"data": []}, _make_comparison_response("bbb222")])
         client = JaegerClient(mock_http)
         with pytest.raises(ValueError, match="trace_id_a"):
             client.compare_traces("aaa111", "bbb222")
@@ -469,7 +476,7 @@ class TestCompareTraces:
                 }
             ]
         }
-        mock_http.get.side_effect = [resp_a, resp_b]
+        mock_http.aget_many = AsyncMock(return_value=[resp_a, resp_b])
         client = JaegerClient(mock_http)
         result = client.compare_traces("aaa111", "bbb222")
 
@@ -485,7 +492,7 @@ class TestCompareTraces:
         mock_http = MagicMock()
         resp_a = _make_comparison_response("aaa111", child_duration=200_000)
         resp_b = _make_comparison_response("bbb222", child_duration=300_000)
-        mock_http.get.side_effect = [resp_a, resp_b]
+        mock_http.aget_many = AsyncMock(return_value=[resp_a, resp_b])
         client = JaegerClient(mock_http)
         result = client.compare_traces("aaa111", "bbb222")
 
@@ -561,7 +568,7 @@ class TestSpanStatistics:
 
     def test_span_statistics_happy_path(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = _make_stats_response()
+        mock_http.aget = AsyncMock(return_value=_make_stats_response())
         client = JaegerClient(mock_http)
         result = client.span_statistics("order-service")
 
@@ -577,7 +584,7 @@ class TestSpanStatistics:
 
     def test_span_statistics_empty_traces(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = {"data": []}
+        mock_http.aget = AsyncMock(return_value={"data": []})
         client = JaegerClient(mock_http)
         result = client.span_statistics("order-service")
 
@@ -586,12 +593,12 @@ class TestSpanStatistics:
 
     def test_span_statistics_operation_filter(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = _make_stats_response()
+        mock_http.aget = AsyncMock(return_value=_make_stats_response())
         client = JaegerClient(mock_http)
         result = client.span_statistics("order-service", operation="GET /orders")
 
         assert result.operation == "GET /orders"
-        call_args = mock_http.get.call_args
+        call_args = mock_http.aget.call_args
         params = call_args[1].get("params") or call_args[0][1] if len(call_args[0]) > 1 else call_args[1]["params"]
         assert params["operation"] == "GET /orders"
 
@@ -621,7 +628,7 @@ class TestSpanStatistics:
             }
         ]
         mock_http = MagicMock()
-        mock_http.get.return_value = {"data": traces}
+        mock_http.aget = AsyncMock(return_value={"data": traces})
         client = JaegerClient(mock_http)
         result = client.span_statistics("svc")
 
@@ -631,17 +638,17 @@ class TestSpanStatistics:
 
     def test_span_statistics_limit_clamped(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = {"data": []}
+        mock_http.aget = AsyncMock(return_value={"data": []})
         client = JaegerClient(mock_http)
         client.span_statistics("svc", limit=200)
 
-        call_args = mock_http.get.call_args
+        call_args = mock_http.aget.call_args
         params = call_args[1].get("params") or call_args[0][1] if len(call_args[0]) > 1 else call_args[1]["params"]
         assert params["limit"] == 100
 
     def test_span_statistics_return_types(self) -> None:
         mock_http = MagicMock()
-        mock_http.get.return_value = _make_stats_response()
+        mock_http.aget = AsyncMock(return_value=_make_stats_response())
         client = JaegerClient(mock_http)
         result = client.span_statistics("order-service")
 

@@ -11,8 +11,11 @@ from __future__ import annotations
 from typing import Any
 
 from jaeger_mcp.models import (
+    BottleneckSpan,
     ChangedSpan,
     CompareTracesOutput,
+    CriticalPathOutput,
+    CriticalPathSpan,
     ExecutionNode,
     MatchedSpanSummary,
     OperationStats,
@@ -359,6 +362,526 @@ def aggregate_span_statistics(traces: list[dict[str, Any]]) -> list[OperationSta
             }
         )
     return stats
+
+
+# ── Batch Window Comparison ──────────────────────────────────────────────
+
+
+def compute_deviation_score(baseline_stat: dict, comparison_stat: dict) -> float:
+    """Compute a normalized deviation score between two operation stats.
+
+    Combines relative changes in count, latency percentiles, and error rate
+    into a single score indicating overall behavioral change magnitude.
+
+    Returns:
+        Normalized score between 0 (identical) and 1+ (highly different).
+    """
+    # Handle edge cases
+    if baseline_stat["count"] == 0 and comparison_stat["count"] == 0:
+        return 0.0
+
+    score = 0.0
+
+    # Count change contribution (normalized by max count)
+    max_count = max(baseline_stat["count"], comparison_stat["count"], 1)
+    count_change = abs(comparison_stat["count"] - baseline_stat["count"]) / max_count
+    score += count_change * 0.3  # Weight: 30%
+
+    # Latency change contribution (normalized by baseline p95)
+    baseline_p95 = baseline_stat["p95_duration_us"]
+    if baseline_p95 > 0:
+        p95_change = abs(comparison_stat["p95_duration_us"] - baseline_p95) / baseline_p95
+        score += p95_change * 0.5  # Weight: 50%
+
+    # Error rate change contribution
+    error_change = abs(comparison_stat["error_rate"] - baseline_stat["error_rate"])
+    score += error_change * 0.2  # Weight: 20%
+
+    return min(score, 10.0)  # Cap at 10.0 to prevent extreme outliers
+
+
+def compare_windows(baseline_stats: list[dict], comparison_stats: list[dict]) -> list[dict]:
+    """Compare operation statistics between two time windows.
+
+    Args:
+        baseline_stats: Aggregated stats from baseline time window.
+        comparison_stats: Aggregated stats from comparison time window.
+
+    Returns:
+        List of OperationDiff dictionaries with change analysis.
+    """
+    # Create lookup dictionaries for efficient matching
+    baseline_dict = {stat["operation"]: stat for stat in baseline_stats}
+    comparison_dict = {stat["operation"]: stat for stat in comparison_stats}
+
+    # Get all unique operations
+    all_operations = set(baseline_dict.keys()) | set(comparison_dict.keys())
+
+    results = []
+    added_count = 0
+    removed_count = 0
+    faster_count = 0
+    slower_count = 0
+    total_deviation = 0.0
+
+    for operation in sorted(all_operations):
+        baseline_stat = baseline_dict.get(operation)
+        comparison_stat = comparison_dict.get(operation)
+
+        # Determine change type
+        if baseline_stat is None:
+            change_type = "added"
+            added_count += 1
+        elif comparison_stat is None:
+            change_type = "removed"
+            removed_count += 1
+        else:
+            # Both exist - compare latencies
+            baseline_p95 = baseline_stat["p95_duration_us"]
+            comparison_p95 = comparison_stat["p95_duration_us"]
+
+            if comparison_p95 < baseline_p95 * 0.95:  # 5% improvement threshold
+                change_type = "faster"
+                faster_count += 1
+            elif comparison_p95 > baseline_p95 * 1.05:  # 5% degradation threshold
+                change_type = "slower"
+                slower_count += 1
+            else:
+                change_type = "unchanged"
+
+        # Create diff entry
+        if baseline_stat and comparison_stat:
+            # Both windows have data
+            count_delta = comparison_stat["count"] - baseline_stat["count"]
+            p50_delta_us = comparison_stat["p50_duration_us"] - baseline_stat["p50_duration_us"]
+            p50_delta_pct = (
+                (p50_delta_us / baseline_stat["p50_duration_us"] * 100) if baseline_stat["p50_duration_us"] > 0 else 0
+            )
+            p95_delta_us = comparison_stat["p95_duration_us"] - baseline_stat["p95_duration_us"]
+            p95_delta_pct = (
+                (p95_delta_us / baseline_stat["p95_duration_us"] * 100) if baseline_stat["p95_duration_us"] > 0 else 0
+            )
+            error_rate_delta = comparison_stat["error_rate"] - baseline_stat["error_rate"]
+
+            deviation_score = compute_deviation_score(baseline_stat, comparison_stat)
+            total_deviation += deviation_score
+
+            diff = {
+                "operation": operation,
+                "baseline_count": baseline_stat["count"],
+                "comparison_count": comparison_stat["count"],
+                "count_delta": count_delta,
+                "baseline_p50_us": baseline_stat["p50_duration_us"],
+                "comparison_p50_us": comparison_stat["p50_duration_us"],
+                "p50_delta_us": p50_delta_us,
+                "p50_delta_pct": round(p50_delta_pct, 1),
+                "baseline_p95_us": baseline_stat["p95_duration_us"],
+                "comparison_p95_us": comparison_stat["p95_duration_us"],
+                "p95_delta_us": p95_delta_us,
+                "p95_delta_pct": round(p95_delta_pct, 1),
+                "baseline_error_rate": round(baseline_stat["error_rate"], 4),
+                "comparison_error_rate": round(comparison_stat["error_rate"], 4),
+                "error_rate_delta": round(error_rate_delta, 4),
+                "change_type": change_type,
+                "deviation_score": round(deviation_score, 3),
+            }
+        elif baseline_stat:
+            # Only baseline has data (removed)
+            diff = {
+                "operation": operation,
+                "baseline_count": baseline_stat["count"],
+                "comparison_count": 0,
+                "count_delta": -baseline_stat["count"],
+                "baseline_p50_us": baseline_stat["p50_duration_us"],
+                "comparison_p50_us": 0,
+                "p50_delta_us": -baseline_stat["p50_duration_us"],
+                "p50_delta_pct": -100.0,
+                "baseline_p95_us": baseline_stat["p95_duration_us"],
+                "comparison_p95_us": 0,
+                "p95_delta_us": -baseline_stat["p95_duration_us"],
+                "p95_delta_pct": -100.0,
+                "baseline_error_rate": round(baseline_stat["error_rate"], 4),
+                "comparison_error_rate": 0.0,
+                "error_rate_delta": -round(baseline_stat["error_rate"], 4),
+                "change_type": change_type,
+                "deviation_score": 1.0,  # High deviation for removed operations
+            }
+            total_deviation += 1.0
+        else:
+            # Only comparison has data (added)
+            diff = {
+                "operation": operation,
+                "baseline_count": 0,
+                "comparison_count": comparison_stat["count"] if comparison_stat else 0,
+                "count_delta": comparison_stat["count"] if comparison_stat else 0,
+                "baseline_p50_us": 0,
+                "comparison_p50_us": comparison_stat["p50_duration_us"] if comparison_stat else 0,
+                "p50_delta_us": comparison_stat["p50_duration_us"] if comparison_stat else 0,
+                "p50_delta_pct": 100.0 if comparison_stat else 0.0,
+                "baseline_p95_us": 0,
+                "comparison_p95_us": comparison_stat["p95_duration_us"] if comparison_stat else 0,
+                "p95_delta_us": comparison_stat["p95_duration_us"] if comparison_stat else 0,
+                "p95_delta_pct": 100.0 if comparison_stat else 0.0,
+                "baseline_error_rate": 0.0,
+                "comparison_error_rate": round(comparison_stat["error_rate"], 4) if comparison_stat else 0.0,
+                "error_rate_delta": round(comparison_stat["error_rate"], 4) if comparison_stat else 0.0,
+                "change_type": change_type,
+                "deviation_score": 1.0,  # High deviation for added operations
+            }
+            total_deviation += 1.0
+
+        results.append(diff)
+
+    # Sort by deviation score descending (most changed first)
+    results.sort(key=lambda x: x["deviation_score"], reverse=True)
+
+    # Add summary counts to results metadata (will be extracted in tool)
+    results.append(
+        {
+            "_summary": {
+                "added_count": added_count,
+                "removed_count": removed_count,
+                "faster_count": faster_count,
+                "slower_count": slower_count,
+                "total_deviation": total_deviation,
+                "operation_count": len([r for r in results if "_summary" not in r]),
+            }
+        }
+    )
+
+    return results
+
+
+# ── Critical Path Analysis ───────────────────────────────────────────────
+
+
+def _build_span_tree(spans: list[dict]) -> tuple[dict[str, dict], dict[str, list[str]]]:
+    """Build parent-child relationships from spans.
+
+    Returns:
+        Tuple of (span_lookup_by_id, children_lookup_by_parent_id).
+    """
+    span_dict = {span["spanID"]: span for span in spans}
+    children = {}
+
+    for span in spans:
+        span_id = span["spanID"]
+        # Initialize empty children list for all spans
+        if span_id not in children:
+            children[span_id] = []
+
+        # Find parent from references
+        parent_id = None
+        for ref in span.get("references", []):
+            if ref.get("refType") == "CHILD_OF":
+                parent_id = ref.get("spanID")
+                break
+
+        if parent_id:
+            if parent_id not in children:
+                children[parent_id] = []
+            children[parent_id].append(span_id)
+
+    return span_dict, children
+
+
+def find_critical_path(spans: list[dict]) -> list[dict]:
+    """Find the longest-duration path from root to leaf in the span tree.
+
+    Uses dynamic programming to compute the longest path:
+    - For each node, compute max cumulative duration of paths starting from that node
+    - Track the next node in the optimal path for reconstruction
+
+    Returns:
+        List of spans in critical path order (root to leaf).
+    """
+    if not spans:
+        return []
+
+    span_dict, children = _build_span_tree(spans)
+    root_span = find_root_span(spans)
+    if not root_span:
+        return []
+
+    # Memoization dictionaries
+    max_duration_from = {}  # span_id -> max cumulative duration from this node
+    next_in_path = {}  # span_id -> next span_id in optimal path
+
+    def compute_max_duration(span_id: str) -> int:
+        """Recursive helper with memoization."""
+        if span_id in max_duration_from:
+            return max_duration_from[span_id]
+
+        span = span_dict[span_id]
+        duration = span.get("duration", 0)
+
+        # Base case: leaf node
+        if not children.get(span_id):
+            max_duration_from[span_id] = duration
+            return duration
+
+        # Recursive case: max of children + own duration
+        max_child_duration = 0
+        next_best_child = None
+
+        for child_id in children[span_id]:
+            child_duration = compute_max_duration(child_id)
+            if child_duration > max_child_duration:
+                max_child_duration = child_duration
+                next_best_child = child_id
+
+        max_duration_from[span_id] = duration + max_child_duration
+        if next_best_child:
+            next_in_path[span_id] = next_best_child
+
+        return max_duration_from[span_id]
+
+    # Compute max durations starting from root
+    compute_max_duration(root_span["spanID"])
+
+    # Reconstruct path
+    path = []
+    current_id = root_span["spanID"]
+    while current_id:
+        path.append(span_dict[current_id])
+        current_id = next_in_path.get(current_id)
+
+    return path
+
+
+def rank_bottlenecks(spans: list[dict], limit: int = 50) -> list[dict]:
+    """Rank spans by self-time (duration - sum of child durations).
+
+    Args:
+        spans: List of all spans in the trace.
+        limit: Maximum number of bottlenecks to return.
+
+    Returns:
+        List of spans sorted by self-time descending, limited to `limit`.
+    """
+    if not spans:
+        return []
+
+    span_dict, children = _build_span_tree(spans)
+
+    # Calculate self-time for each span
+    spans_with_self_time = []
+    for span in spans:
+        span_id = span["spanID"]
+        duration = span.get("duration", 0)
+
+        # Sum child durations
+        child_duration_sum = 0
+        for child_id in children.get(span_id, []):
+            child_span = span_dict.get(child_id, {})
+            child_duration_sum += child_span.get("duration", 0)
+
+        self_time = duration - child_duration_sum
+        if self_time > 0:  # Only include spans with positive self-time
+            spans_with_self_time.append((span, self_time))
+
+    # Sort by self-time descending and limit
+    spans_with_self_time.sort(key=lambda x: x[1], reverse=True)
+    return [span for span, _ in spans_with_self_time[:limit]]
+
+
+def _format_critical_path_span(
+    span: dict, cumulative_duration: int, total_duration: int, processes: dict
+) -> CriticalPathSpan:
+    """Convert a span to CriticalPathSpan format."""
+    process_id = span.get("processID", "")
+    service = (processes.get(process_id, {}) or {}).get("serviceName", "unknown")
+
+    duration = span.get("duration", 0)
+    percentage = (duration / total_duration * 100) if total_duration > 0 else 0
+
+    return {
+        "span_id": span["spanID"],
+        "operation": span.get("operationName", "unknown"),
+        "service": service,
+        "duration_us": duration,
+        "cumulative_duration_us": cumulative_duration,
+        "percentage_of_total": round(percentage, 1),
+    }
+
+
+def _format_bottleneck_span(span: dict, self_time: int, total_duration: int, processes: dict) -> BottleneckSpan:
+    """Convert a span to BottleneckSpan format."""
+    process_id = span.get("processID", "")
+    service = (processes.get(process_id, {}) or {}).get("serviceName", "unknown")
+
+    duration = span.get("duration", 0)
+    self_percentage = (self_time / total_duration * 100) if total_duration > 0 else 0
+
+    return {
+        "span_id": span["spanID"],
+        "operation": span.get("operationName", "unknown"),
+        "service": service,
+        "duration_us": duration,
+        "self_time_us": self_time,
+        "self_time_percentage": round(self_percentage, 1),
+    }
+
+
+# ── Anomaly Detection ────────────────────────────────────────────────────
+
+
+def compute_z_score(current_value: float, baseline_mean: float, baseline_std: float) -> float:
+    """Compute z-score for anomaly detection.
+
+    Z-score represents how many standard deviations an element is from the mean.
+    Higher absolute values indicate more significant deviations.
+
+    Returns:
+        Z-score (positive = above baseline, negative = below baseline).
+        Returns 0.0 if baseline_std is 0 (no variance).
+    """
+    if baseline_std == 0:
+        return 0.0
+    return (current_value - baseline_mean) / baseline_std
+
+
+def detect_anomalies(
+    current_stats: list[OperationStats], baseline_stats: list[OperationStats], sensitivity: float = 2.0
+) -> list[dict]:
+    """Detect anomalies by comparing current stats to baseline stats.
+
+    Args:
+        current_stats: Recent operation statistics.
+        baseline_stats: Historical baseline statistics.
+        sensitivity: Sigma threshold for anomaly detection (default 2.0).
+
+    Returns:
+        List of OperationAnomaly dictionaries with flagged operations.
+    """
+    # Create lookup dictionaries for efficient matching
+    baseline_dict = {stat["operation"]: stat for stat in baseline_stats}
+    current_dict = {stat["operation"]: stat for stat in current_stats}
+
+    # Get all operations that exist in both periods
+    common_operations = set(baseline_dict.keys()) & set(current_dict.keys())
+
+    anomalies = []
+    latency_count = 0
+    error_rate_count = 0
+
+    for operation in sorted(common_operations):
+        baseline_stat = baseline_dict[operation]
+        current_stat = current_dict[operation]
+
+        # Skip operations with insufficient data
+        if baseline_stat["count"] < 5 or current_stat["count"] < 5:
+            continue
+
+        # Latency anomaly detection (p95 and p99)
+        # For simplicity, we'll use a simple comparison approach rather than true statistical modeling
+        # In a real implementation, we'd collect multiple baseline samples to compute mean/std
+        baseline_p95 = baseline_stat["p95_duration_us"]
+        current_p95 = current_stat["p95_duration_us"]
+        baseline_p99 = baseline_stat["p99_duration_us"]
+        current_p99 = current_stat["p99_duration_us"]
+
+        # Simple ratio-based detection for latency
+        if baseline_p95 > 0:
+            p95_ratio = current_p95 / baseline_p95
+            if p95_ratio > 1.5:  # 50% increase
+                z_score = compute_z_score(
+                    float(current_p95), float(baseline_p95), float(baseline_p95 * 0.2)
+                )  # Assume 20% std
+                severity = "critical" if p95_ratio > 2.0 else "high" if p95_ratio > 1.75 else "medium"
+
+                anomalies.append(
+                    {
+                        "operation": operation,
+                        "anomaly_type": "latency",
+                        "baseline_stat": "p95_duration_us",
+                        "baseline_value": float(baseline_p95),
+                        "current_value": float(current_p95),
+                        "z_score": round(z_score, 2),
+                        "severity": severity,
+                        "trace_count": current_stat["count"],
+                    }
+                )
+                latency_count += 1
+
+        if baseline_p99 > 0:
+            p99_ratio = current_p99 / baseline_p99
+            if p99_ratio > 1.5:  # 50% increase
+                z_score = compute_z_score(
+                    float(current_p99), float(baseline_p99), float(baseline_p99 * 0.2)
+                )  # Assume 20% std
+                severity = "critical" if p99_ratio > 2.0 else "high" if p99_ratio > 1.75 else "medium"
+
+                anomalies.append(
+                    {
+                        "operation": operation,
+                        "anomaly_type": "latency",
+                        "baseline_stat": "p99_duration_us",
+                        "baseline_value": float(baseline_p99),
+                        "current_value": float(current_p99),
+                        "z_score": round(z_score, 2),
+                        "severity": severity,
+                        "trace_count": current_stat["count"],
+                    }
+                )
+                latency_count += 1
+
+        # Error rate anomaly detection
+        baseline_error_rate = baseline_stat["error_rate"]
+        current_error_rate = current_stat["error_rate"]
+
+        # Simple threshold-based detection for error rates
+        if baseline_error_rate > 0:
+            error_ratio = current_error_rate / baseline_error_rate
+            if error_ratio > 2.0:  # 100% increase
+                z_score = compute_z_score(
+                    current_error_rate, baseline_error_rate, baseline_error_rate * 0.5
+                )  # Assume 50% std
+                severity = "critical" if error_ratio > 5.0 else "high" if error_ratio > 3.0 else "medium"
+
+                anomalies.append(
+                    {
+                        "operation": operation,
+                        "anomaly_type": "error_rate",
+                        "baseline_stat": "error_rate",
+                        "baseline_value": round(baseline_error_rate, 4),
+                        "current_value": round(current_error_rate, 4),
+                        "z_score": round(z_score, 2),
+                        "severity": severity,
+                        "trace_count": current_stat["count"],
+                    }
+                )
+                error_rate_count += 1
+        elif current_error_rate > 0.01:  # New errors appearing (more than 1%)
+            anomalies.append(
+                {
+                    "operation": operation,
+                    "anomaly_type": "error_rate",
+                    "baseline_stat": "error_rate",
+                    "baseline_value": 0.0,
+                    "current_value": round(current_error_rate, 4),
+                    "z_score": 5.0,  # High z-score for new errors
+                    "severity": "high" if current_error_rate > 0.05 else "medium",
+                    "trace_count": current_stat["count"],
+                }
+            )
+            error_rate_count += 1
+
+    # Sort by severity and z-score descending
+    anomalies.sort(key=lambda x: (x["severity"], abs(x["z_score"])), reverse=True)
+
+    # Add summary to results
+    anomalies.append(
+        {
+            "_summary": {
+                "total_anomalies": len([a for a in anomalies if "_summary" not in a]),
+                "latency_anomalies": latency_count,
+                "error_rate_anomalies": error_rate_count,
+            }
+        }
+    )
+
+    return anomalies
 
 
 # ── Backward-compatible aliases (underscore-prefixed) ─────────────────

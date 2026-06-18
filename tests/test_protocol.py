@@ -71,6 +71,13 @@ EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
         "required_params": {"service"},
         "optional_params": {"operation", "limit"},
     },
+    "jaeger_critical_path": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "required_params": {"trace_id"},
+        "optional_params": set(),
+    },
 }
 
 

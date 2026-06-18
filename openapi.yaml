@@ -1,0 +1,455 @@
+openapi: 3.0.3
+info:
+  title: Jaeger Query Service API
+  description: |
+    This OpenAPI specification documents the Jaeger Query Service API that the jaeger-mcp server interacts with.
+    
+    The jaeger-mcp project provides an MCP (Model Context Protocol) server that acts as a bridge between 
+    AI assistants and the Jaeger distributed tracing system. It translates MCP tool calls into 
+    HTTP requests to the Jaeger Query Service API endpoints.
+    
+    This specification covers the core endpoints used by the jaeger-mcp tools:
+    - `/api/services` - List all instrumented services
+    - `/api/services/{service}/operations` - List operations for a service
+    - `/api/traces` - Search and retrieve traces
+    - `/api/traces/{traceID}` - Retrieve a specific trace
+    - `/api/dependencies` - Get service dependency graph
+  version: 1.0.0
+  contact:
+    name: Jaeger Tracing
+    url: https://www.jaegertracing.io/
+    email: jaeger-tracing@googlegroups.com
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+
+servers:
+  - url: https://jaeger-query.example.com
+    description: Example Jaeger Query Service endpoint
+
+paths:
+  /api/services:
+    get:
+      summary: Get services
+      description: Returns a list of all services that have been observed by Jaeger.
+      operationId: getServices
+      responses:
+        '200':
+          description: Successful response with list of services
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: string
+                    description: List of service names
+                  total:
+                    type: integer
+                    description: Total number of services
+                  limit:
+                    type: integer
+                    description: Request limit
+                  offset:
+                    type: integer
+                    description: Request offset
+                required:
+                  - data
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal Server Error
+
+  /api/services/{service}/operations:
+    get:
+      summary: Get operations for service
+      description: Returns a list of operations for a given service.
+      operationId: getOperations
+      parameters:
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Service name
+      responses:
+        '200':
+          description: Successful response with list of operations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: string
+                    description: List of operation names
+                  total:
+                    type: integer
+                    description: Total number of operations
+                required:
+                  - data
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '404':
+          description: Service not found
+        '500':
+          description: Internal Server Error
+
+  /api/traces:
+    get:
+      summary: Search traces
+      description: |
+        Search for traces based on various filters. This endpoint is used for:
+        - Searching traces with rich filters (jaeger_search_traces)
+        - Computing span statistics (jaeger_span_statistics)
+        - Finding traces for comparison (jaeger_compare_traces)
+        - Batch window comparison (jaeger_compare_windows)
+        - Anomaly detection (jaeger_detect_anomalies)
+      operationId: searchTraces
+      parameters:
+        - name: service
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Service name to filter traces
+        - name: operation
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Operation name to filter traces
+        - name: start
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+          description: Start time in microseconds since Unix epoch
+        - name: end
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+          description: End time in microseconds since Unix epoch
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 20
+          description: Maximum number of traces to return
+        - name: tag
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Tag filter in format key=value
+        - name: minDuration
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+          description: Minimum duration in microseconds
+        - name: maxDuration
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+          description: Maximum duration in microseconds
+        - name: lookback
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Lookback period (e.g., "1h", "2d")
+      responses:
+        '200':
+          description: Successful response with traces
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Trace'
+                  total:
+                    type: integer
+                    description: Total number of traces
+                  limit:
+                    type: integer
+                    description: Request limit
+                required:
+                  - data
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal Server Error
+
+  /api/traces/{traceID}:
+    get:
+      summary: Get trace by ID
+      description: |
+        Retrieve a specific trace by its ID. This endpoint is used for:
+        - Getting detailed trace information (jaeger_get_trace)
+        - Comparing two specific traces (jaeger_compare_traces)
+        - Critical path analysis (jaeger_critical_path)
+      operationId: getTrace
+      parameters:
+        - name: traceID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier of the trace
+        - name: raw
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Return raw trace data
+      responses:
+        '200':
+          description: Successful response with trace data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Trace'
+                required:
+                  - data
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '404':
+          description: Trace not found
+        '500':
+          description: Internal Server Error
+
+  /api/dependencies:
+    get:
+      summary: Get dependencies
+      description: |
+        Get service dependencies for a given time range. Used by jaeger_get_dependencies tool.
+      operationId: getDependencies
+      parameters:
+        - name: start
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: Start time in microseconds since Unix epoch
+        - name: end
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: End time in microseconds since Unix epoch
+      responses:
+        '200':
+          description: Successful response with dependencies
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DependencyLink'
+                required:
+                  - data
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal Server Error
+
+components:
+  schemas:
+    Trace:
+      type: object
+      properties:
+        traceID:
+          type: string
+          description: Unique identifier of the trace
+        spans:
+          type: array
+          items:
+            $ref: '#/components/schemas/Span'
+        processes:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Process'
+      required:
+        - traceID
+        - spans
+
+    Span:
+      type: object
+      properties:
+        traceID:
+          type: string
+          description: Identifier of the trace this span belongs to
+        spanID:
+          type: string
+          description: Unique identifier of the span
+        operationName:
+          type: string
+          description: Name of the operation represented by this span
+        references:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpanReference'
+        startTime:
+          type: integer
+          format: int64
+          description: Start time in microseconds since Unix epoch
+        duration:
+          type: integer
+          format: int64
+          description: Duration in microseconds
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValue'
+        logs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Log'
+        processID:
+          type: string
+          description: Identifier of the process that created this span
+        warnings:
+          type: array
+          items:
+            type: string
+        flags:
+          type: integer
+          description: Span flags
+      required:
+        - traceID
+        - spanID
+        - operationName
+        - startTime
+        - duration
+
+    SpanReference:
+      type: object
+      properties:
+        refType:
+          type: string
+          enum: [CHILD_OF, FOLLOWS_FROM]
+        traceID:
+          type: string
+        spanID:
+          type: string
+      required:
+        - refType
+        - traceID
+        - spanID
+
+    KeyValue:
+      type: object
+      properties:
+        key:
+          type: string
+        type:
+          type: string
+          enum: [string, bool, int64, float64, binary]
+        value:
+          type: string
+      required:
+        - key
+        - type
+        - value
+
+    Log:
+      type: object
+      properties:
+        timestamp:
+          type: integer
+          format: int64
+          description: Timestamp in microseconds since Unix epoch
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValue'
+      required:
+        - timestamp
+        - fields
+
+    Process:
+      type: object
+      properties:
+        serviceName:
+          type: string
+          description: Name of the service
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValue'
+      required:
+        - serviceName
+
+    DependencyLink:
+      type: object
+      properties:
+        parent:
+          type: string
+          description: Parent service name
+        child:
+          type: string
+          description: Child service name
+        callCount:
+          type: integer
+          format: int64
+          description: Number of calls from parent to child
+        source:
+          type: string
+          description: Source of the dependency data
+      required:
+        - parent
+        - child
+        - callCount
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer token for authentication
+    basicAuth:
+      type: http
+      scheme: basic
+      description: HTTP Basic authentication
+
+security:
+  - bearerAuth: []
+  - basicAuth: []
+  - {}

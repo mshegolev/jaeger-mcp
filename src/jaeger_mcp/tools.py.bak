@@ -25,14 +25,12 @@ from pydantic import Field
 from jaeger_mcp import output
 from jaeger_mcp._mcp import get_client, mcp
 from jaeger_mcp.models import (
-    AnomalyDetectionOutput,
     CompareTracesOutput,
     CriticalPathOutput,
     CriticalPathSpan,
     BottleneckSpan,
     DependenciesOutput,
     DependencyEdge,
-    OperationAnomaly,
     OperationDiff,
     OperationsOutput,
     SearchTracesOutput,
@@ -58,8 +56,6 @@ from jaeger_mcp.shaping import (
     compare_traces_diff as _compare_traces_diff,
     compare_windows,
     compute_deviation_score,
-    compute_z_score,
-    detect_anomalies,
     find_critical_path,
     find_root_span as _find_root_span,
     rank_bottlenecks,
@@ -1075,7 +1071,7 @@ async def jaeger_compare_windows(
     baseline_end: Annotated[
         int,
         Field(
-            gt=0,
+            gt=baseline_start,
             description="Baseline window end time (Unix timestamp in microseconds).",
         ),
     ],
@@ -1089,7 +1085,7 @@ async def jaeger_compare_windows(
     comparison_end: Annotated[
         int,
         Field(
-            gt=0,
+            gt=comparison_start,
             description="Comparison window end time (Unix timestamp in microseconds).",
         ),
     ],
@@ -1174,12 +1170,8 @@ async def jaeger_compare_windows(
         baseline_stats = _aggregate_span_statistics(baseline_traces)
         comparison_stats = _aggregate_span_statistics(comparison_traces)
 
-        # Convert OperationStats to dict for compare_windows function
-        baseline_stats_dicts = [dict(stat) for stat in baseline_stats]
-        comparison_stats_dicts = [dict(stat) for stat in comparison_stats]
-
         # Compare windows
-        diff_results = compare_windows(baseline_stats_dicts, comparison_stats_dicts)
+        diff_results = compare_windows(baseline_stats, comparison_stats)
 
         # Extract summary from diff results (added by compare_windows)
         summary = diff_results.pop() if diff_results and "_summary" in diff_results[-1] else {}
@@ -1204,14 +1196,13 @@ async def jaeger_compare_windows(
         overall_deviation_score = (total_deviation / operation_count) if operation_count > 0 else 0.0
 
         # Create output
-        operations_data = [d for d in diff_results if "_summary" not in d]
         result: WindowComparisonOutput = {
             "service": service,
             "baseline_start": baseline_start,
             "baseline_end": baseline_end,
             "comparison_start": comparison_start,
             "comparison_end": comparison_end,
-            "operations": operations_data,  # type: ignore
+            "operations": [d for d in diff_results if "_summary" not in d],
             "total_operations": operation_count,
             "added_count": added_count,
             "removed_count": removed_count,
@@ -1278,210 +1269,3 @@ async def jaeger_compare_windows(
 
     except Exception as exc:
         return output.fail(exc, f"comparing windows for service {service!r}")
-
-
-# ── Anomaly Detection ────────────────────────────────────────────────────
-
-
-@mcp.tool(
-    name="jaeger_detect_anomalies",
-    annotations={
-        "title": "Detect Anomalies",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": True,
-    },
-    structured_output=True,
-)
-async def jaeger_detect_anomalies(
-    service: Annotated[
-        str,
-        Field(
-            min_length=1,
-            max_length=100,
-            description="Service name to detect anomalies for.",
-        ),
-    ],
-    baseline_duration_minutes: Annotated[
-        int,
-        Field(
-            ge=5,
-            le=1440,
-            description="Historical baseline duration in minutes (5-1440, default 60).",
-        ),
-    ] = 60,
-    sensitivity: Annotated[
-        float,
-        Field(
-            ge=1.0,
-            le=5.0,
-            description="Anomaly sensitivity threshold (1.0-5.0, default 2.0). Lower = more sensitive.",
-        ),
-    ] = 2.0,
-    current_duration_minutes: Annotated[
-        int,
-        Field(
-            ge=1,
-            le=60,
-            description="Current observation window in minutes (1-60, default 5).",
-        ),
-    ] = 5,
-) -> AnomalyDetectionOutput:
-    """Detect latency and error-rate anomalies for a service by comparing recent behavior to historical baseline.
-
-    Fetches traces from a historical baseline window and a recent observation window,
-    computes per-operation statistics for both, then identifies statistically significant
-    deviations that may indicate performance issues or reliability problems.
-
-    Examples:
-        - Use when: "Are there any new performance issues in `order-service`?"
-          → `service='order-service'` (uses default 60-minute baseline, 5-minute current).
-        - Use when: "Be more sensitive to subtle changes"
-          → set `sensitivity=1.5` (lower threshold).
-        - Use when: "Check for issues over the last 24 hours against previous week"
-          → `baseline_duration_minutes=10080`, `current_duration_minutes=1440`.
-        - Don't use when: You want to compare two specific time periods
-          (use jaeger_compare_windows instead).
-        - Don't use when: You want full span detail for a single trace
-          (use jaeger_get_trace instead).
-
-    Returns:
-        AnomalyDetectionOutput with flagged operations and severity scores.
-    """
-    try:
-        import time
-
-        client = await get_client()
-
-        # Calculate time windows
-        now_us = int(time.time() * 1_000_000)
-        current_end_us = now_us
-        current_start_us = now_us - (current_duration_minutes * 60 * 1_000_000)
-        baseline_end_us = current_start_us
-        baseline_start_us = baseline_end_us - (baseline_duration_minutes * 60 * 1_000_000)
-
-        # Convert timestamps to milliseconds for Jaeger API
-        baseline_params = {
-            "service": service,
-            "start": baseline_start_us // 1000,
-            "end": baseline_end_us // 1000,
-            "limit": 200,  # Larger limit for baseline
-        }
-        current_params = {
-            "service": service,
-            "start": current_start_us // 1000,
-            "end": current_end_us // 1000,
-            "limit": 100,  # Smaller limit for current (more recent)
-        }
-
-        # Use concurrent fetching for both windows (Phase 11 optimization)
-        results = await client.aget_many(
-            [
-                ("/traces", baseline_params),
-                ("/traces", current_params),
-            ]
-        )
-
-        baseline_data = results[0] or {}
-        current_data = results[1] or {}
-
-        baseline_traces: list[dict[str, Any]] = baseline_data.get("data") or []
-        current_traces: list[dict[str, Any]] = current_data.get("data") or []
-
-        # Aggregate statistics for each window
-        baseline_stats = _aggregate_span_statistics(baseline_traces)
-        current_stats = _aggregate_span_statistics(current_traces)
-
-        # Detect anomalies
-        anomaly_results = detect_anomalies(current_stats, baseline_stats, sensitivity)
-
-        # Extract summary from anomaly results (added by detect_anomalies)
-        summary = anomaly_results.pop() if anomaly_results and "_summary" in anomaly_results[-1] else {}
-        if summary:
-            summary_data = summary["_summary"]
-            total_anomalies = summary_data["total_anomalies"]
-            latency_anomalies = summary_data["latency_anomalies"]
-            error_rate_anomalies = summary_data["error_rate_anomalies"]
-        else:
-            # Fallback counts
-            total_anomalies = len([a for a in anomaly_results if "_summary" not in a])
-            latency_anomalies = sum(1 for a in anomaly_results if a.get("anomaly_type") == "latency")
-            error_rate_anomalies = sum(1 for a in anomaly_results if a.get("anomaly_type") == "error_rate")
-
-        # Create output
-        anomalies_data = [a for a in anomaly_results if "_summary" not in a]
-        result: AnomalyDetectionOutput = {
-            "service": service,
-            "baseline_start": baseline_start_us,
-            "baseline_end": baseline_end_us,
-            "current_start": current_start_us,
-            "current_end": current_end_us,
-            "anomalies": anomalies_data,  # type: ignore
-            "total_anomalies": total_anomalies,
-            "latency_anomalies": latency_anomalies,
-            "error_rate_anomalies": error_rate_anomalies,
-            "sensitivity": sensitivity,
-        }
-
-        # Generate markdown summary
-        md = f"## Anomaly Detection Results\n\n"
-        md += f"- **Service:** `{service}`\n"
-        md += (
-            f"- **Baseline Window:** {baseline_duration_minutes} minutes ago → {current_duration_minutes} minutes ago\n"
-        )
-        md += f"- **Current Window:** Last {current_duration_minutes} minutes\n"
-        md += f"- **Sensitivity:** {sensitivity}\n"
-        md += f"- **Traces Analyzed:** {len(baseline_traces)} baseline, {len(current_traces)} current\n"
-        md += f"- **Anomalies Detected:** {total_anomalies}\n"
-        md += f"  - **Latency Anomalies:** {latency_anomalies}\n"
-        md += f"  - **Error Rate Anomalies:** {error_rate_anomalies}\n\n"
-
-        if anomaly_results:
-            md += "### Top Anomalies (by Severity)\n\n"
-            md += "| Operation | Type | Stat | Current | Baseline | Z-Score | Severity |\n"
-            md += "|-----------|------|------|---------|----------|---------|----------|\n"
-
-            # Show top 15 most severe anomalies
-            for anomaly in anomaly_results[:15]:
-                if "_summary" in anomaly:
-                    continue
-                operation = anomaly["operation"]
-                anomaly_type = anomaly["anomaly_type"]
-                stat = anomaly["baseline_stat"]
-                current_val = anomaly["current_value"]
-                baseline_val = anomaly["baseline_value"]
-                z_score = anomaly["z_score"]
-                severity = anomaly["severity"]
-
-                # Format values appropriately
-                if stat.endswith("_us"):
-                    current_display = f"{int(current_val):,}μs"
-                    baseline_display = f"{int(baseline_val):,}μs"
-                else:
-                    current_display = f"{current_val:.4f}"
-                    baseline_display = f"{baseline_val:.4f}"
-
-                # Format severity with emoji
-                severity_display = {
-                    "critical": "🔴 Critical",
-                    "high": "🟠 High",
-                    "medium": "🟡 Medium",
-                    "low": "🟢 Low",
-                }.get(severity, severity)
-
-                md += f"| `{operation}` | {anomaly_type} | {stat} | {current_display} | {baseline_display} | {z_score:+.2f} | {severity_display} |\n"
-
-            if len(anomaly_results) > 15:
-                md += f"\n*... and {len(anomaly_results) - 15} more anomalies (showing top 15)*\n"
-        else:
-            md += "_No anomalies detected with current sensitivity threshold._\n"
-
-        return output.ok(result, md)
-
-    except Exception as exc:
-        return output.fail(
-            exc,
-            f"detecting anomalies for service {service!r} "
-            f"(baseline: {baseline_duration_minutes}min, sensitivity: {sensitivity})",
-        )
