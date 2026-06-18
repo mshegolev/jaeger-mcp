@@ -8,14 +8,14 @@
 [![Tests](https://github.com/mshegolev/jaeger-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/mshegolev/jaeger-mcp/actions/workflows/test.yml)
 
 **MCP server for [Jaeger](https://www.jaegertracing.io/) distributed tracing.**
-Give Claude (or any MCP-capable agent) read access to your trace data — search traces, inspect spans, compare traces, compute span statistics, map service dependencies — without leaving the conversation.
+Give Claude (or any MCP-capable agent) read access to your trace data — search traces, inspect spans, compare traces, compute span statistics, map service dependencies, predict performance issues, and forecast capacity needs — without leaving the conversation.
 
 ## Why another Jaeger MCP?
 
 The existing Jaeger integrations require a running UI or custom scripts. This server:
 
 - Speaks the standard [Model Context Protocol](https://modelcontextprotocol.io/) over **stdio** — works with Claude Desktop, Claude Code, Cursor, and any MCP client.
-- Is **read-only**: all 10 tools carry `readOnlyHint: true` — zero risk of modifying trace data.
+- Is **read-only**: all 12 tools carry `readOnlyHint: true` — zero risk of modifying trace data.
 - Returns **dual-channel output**: structured JSON (`structuredContent`) for programmatic use + Markdown (`content`) for human-readable display.
 - Has **actionable error messages** that name the exact env var to fix and suggest a next step.
 - Supports **Bearer token**, **HTTP Basic auth**, or **no auth** (common for internal deployments).
@@ -35,6 +35,8 @@ The existing Jaeger integrations require a running UI or custom scripts. This se
 | `jaeger_critical_path` | `GET /api/traces/{traceID}` | Longest-duration span chain and bottleneck ranking |
 | `jaeger_compare_windows` | `GET /api/traces` ×2 | Aggregate trace behavior diff between two time periods |
 | `jaeger_detect_anomalies` | `GET /api/traces` ×2 | Statistical latency/error-rate spike detection per operation |
+| `jaeger_predict_degradation` | `GET /api/traces` | Predict performance degradation 2-24 hours in advance |
+| `jaeger_forecast_capacity` | `GET /api/traces` | Forecast throughput demands and resource requirements |
 
 ## Installation
 
