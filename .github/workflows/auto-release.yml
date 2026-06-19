@@ -105,6 +105,14 @@ jobs:
           git commit -m "Bump version to v${{ steps.bump_version.outputs.new_version }}"
           git push
 
+      - name: Merge to master branch
+        run: |
+          git fetch origin
+          git checkout master
+          git merge main
+          git push origin master
+          git checkout main
+
       - name: Create tag and release
         run: |
           NEW_VERSION=${{ steps.bump_version.outputs.new_version }}
@@ -123,5 +131,6 @@ jobs:
             
             Changes:
             - Version bump from ${{ steps.current_version.outputs.version }} to ${{ steps.bump_version.outputs.new_version }}
+            - Merged latest changes from main to master
           draft: false
           prerelease: false
