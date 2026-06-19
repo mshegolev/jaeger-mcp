@@ -10,6 +10,7 @@
 - SHIPPED **M4: Tech Debt Cleanup** — Phases 6-7 (shipped 2026-06-08)
 - SHIPPED **M5: Trace Analysis** — Phases 8-10 (shipped 2026-06-16)
 - SHIPPED **v0.4.0: Advanced Trace Analytics** — Phases 11-15 (shipped 2026-06-18)
+- SHIPPED **v0.5.0: Predictive Analytics** — Phase 16 (shipped 2026-06-19)
 
 ## Phases
 
@@ -61,9 +62,9 @@
 - [x] **Phase 14: Anomaly Detection** — Statistical latency/error-rate spike detection per operation
 - [x] **Phase 15: Release v0.4.0** — Version bump, changelog, README with 10 tools
 
-### Future Work: Enhanced Analytics (Phase 16) — PLANNED
+### v0.5.0: Predictive Analytics (Phase 16) — SHIPPED 2026-06-19
 
-- [x] Phase 16: Predictive Analytics — PRED-01, PRED-02, PRED-03, PRED-04, PRED-05, PRED-06
+- [x] **Phase 16: Predictive Analytics** — PRED-01, PRED-02, PRED-03, PRED-04, PRED-05, PRED-06
 
 ## Phase Details
 
