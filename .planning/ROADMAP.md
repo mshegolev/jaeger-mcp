@@ -61,6 +61,10 @@
 - [x] **Phase 14: Anomaly Detection** — Statistical latency/error-rate spike detection per operation
 - [x] **Phase 15: Release v0.4.0** — Version bump, changelog, README with 10 tools
 
+### Future Work: Enhanced Analytics (Phase 16) — PLANNED
+
+- [x] Phase 16: Predictive Analytics — PRED-01, PRED-02, PRED-03, PRED-04, PRED-05, PRED-06
+
 ## Phase Details
 
 ### Phase 11: Async Transport
@@ -122,6 +126,18 @@ Plans:
   3. README documents 10 MCP tools (up from 7) with usage examples for the new analytics tools
 **Plans**: TBD
 
+### Phase 16: Predictive Analytics
+**Goal**: Proactive insights through predictive modeling of trace data patterns
+**Depends on**: Phase 15 (foundation for predictive analytics)
+**Requirements**: PRED-01, PRED-02, PRED-03, PRED-04, PRED-05, PRED-06
+**Success Criteria** (what must be TRUE):
+  1. User can call `jaeger_predict_degradation` with a service name and receive predictions about likely performance issues 2-24 hours in advance
+  2. The tool provides confidence intervals and time horizons for predictions
+  3. User can call `jaeger_forecast_capacity` to get throughput demand forecasts for 7-30 days
+  4. `JaegerClient.predict_degradation()` returns the same analysis programmatically for in-process use
+  5. `JaegerClient.forecast_capacity()` returns the same analysis programmatically for in-process use
+  6. All new tools integrate seamlessly with existing JaegerClient architecture
+
 ## Progress Table
 
 | Phase | Milestone | Requirements | Status | Completed |
@@ -141,3 +157,4 @@ Plans:
 | 13. Batch Window Comparison | v0.4.0 | BATCH-01..05 | Done | 2026-06-18 |
 | 14. Anomaly Detection | v0.4.0 | ANOM-01..06 | Done | 2026-06-18 |
 | 15. Release v0.4.0 | v0.4.0 | REL-04..06 | Done | 2026-06-18 |
+| 16. Predictive Analytics | v0.5.0 | PRED-01..06 | Done | 2026-06-19 |
