@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import logging
 import os
 import time
@@ -382,9 +383,32 @@ class JaegerHTTPClient:
         incrementally and parsing once is sufficient and avoids the ijson
         dependency.
 
+        Retries on transient errors with the same policy as :meth:`aget`
+        (retryable status codes + connection errors, exponential backoff).
+
         Returns:
             Parsed JSON response.
         """
+        last_exc: Exception | None = None
+        for attempt in range(self._retry_total + 1):
+            try:
+                return await self._stream_once(endpoint, params=params)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in self._retry_status_codes:
+                    raise
+                last_exc = exc
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                last_exc = exc
+            if attempt < self._retry_total:
+                await asyncio.sleep(self._retry_backoff * (2**attempt))
+        raise last_exc  # type: ignore[misc]
+
+    async def _stream_once(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        """Single streaming GET attempt (no retry) — see :meth:`aget_stream`."""
         client = await self._ensure_client()
         url = f"{self.api_url}{endpoint}"
         t0 = time.monotonic()
@@ -403,8 +427,6 @@ class JaegerHTTPClient:
                 response.status_code,
                 elapsed_ms,
             )
-
-            import json
 
             body = b"".join(chunks)
             if not body:

@@ -10,14 +10,13 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 
 from jaeger_mcp.client import JaegerHTTPClient
-
 
 # ── JGR-03: Retry ────────────────────────────────────────────────────────
 
@@ -239,7 +238,7 @@ class TestCache:
         mock_time.monotonic.side_effect = [0, 0, 299, 301]  # 0s, 0s, 299s, 301s
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
         monkeypatch.setenv("JAEGER_CACHE_TTL", "300")
-        route = respx.get("https://jaeger.example.com/api/services").mock(
+        respx.get("https://jaeger.example.com/api/services").mock(
             side_effect=[
                 httpx.Response(200, json={"data": ["svc-a"]}),
                 httpx.Response(200, json={"data": ["svc-a", "svc-b"]}),
@@ -394,8 +393,8 @@ class TestStreaming:
         """Streaming fetch returns parsed JSON same as regular aget."""
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
 
-        import respx
         import httpx
+        import respx
 
         trace_data = {"data": [{"traceID": "abc123", "spans": [{"spanID": "s1"}]}]}
 
@@ -412,8 +411,8 @@ class TestStreaming:
     async def test_aget_stream_empty_body_returns_none(self, monkeypatch):
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
 
-        import respx
         import httpx
+        import respx
 
         with respx.mock:
             respx.get("https://jaeger.example.com/api/traces/empty").mock(return_value=httpx.Response(200, content=b""))

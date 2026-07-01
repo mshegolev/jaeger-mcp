@@ -1,15 +1,23 @@
 """MCP tools for Jaeger distributed tracing.
 
-7 read-only tools covering the Jaeger HTTP Query API surface most useful to
+Read-only tools covering the Jaeger HTTP Query API surface most useful to
 an agent diagnosing latency, errors, or service topology:
 
-- ``jaeger_list_services``     — discover which services Jaeger has seen
-- ``jaeger_list_operations``   — list operations for a service
-- ``jaeger_search_traces``     — search traces with rich filters
-- ``jaeger_get_trace``         — retrieve full trace with span tree
-- ``jaeger_get_dependencies``  — service-to-service call graph
-- ``jaeger_compare_traces``    — structural diff between two traces
-- ``jaeger_span_statistics``   — per-operation latency and error stats
+- ``jaeger_list_services``      — discover which services Jaeger has seen
+- ``jaeger_list_operations``    — list operations for a service
+- ``jaeger_search_traces``      — search traces with rich filters
+- ``jaeger_get_trace``          — retrieve full trace with span tree
+- ``jaeger_get_dependencies``   — service-to-service call graph
+- ``jaeger_compare_traces``     — structural diff between two traces
+- ``jaeger_span_statistics``    — per-operation latency and error stats
+- ``jaeger_critical_path``      — longest-duration chain + bottleneck ranking
+- ``jaeger_compare_windows``    — aggregate diff between two time windows
+- ``jaeger_detect_anomalies``   — z-score latency/error anomalies vs baseline
+
+Plus predictive tools registered from :mod:`jaeger_mcp.predictive.tools`:
+
+- ``jaeger_predict_degradation`` — forecast likely performance degradation
+- ``jaeger_forecast_capacity``   — forecast future throughput/capacity needs
 
 All tools are ``async def``. FastMCP calls them directly in the event
 loop — no thread pool overhead.
@@ -28,12 +36,8 @@ from jaeger_mcp.models import (
     AnomalyDetectionOutput,
     CompareTracesOutput,
     CriticalPathOutput,
-    CriticalPathSpan,
-    BottleneckSpan,
     DependenciesOutput,
     DependencyEdge,
-    OperationAnomaly,
-    OperationDiff,
     OperationsOutput,
     SearchTracesOutput,
     ServicesOutput,
@@ -44,9 +48,6 @@ from jaeger_mcp.models import (
     TraceSummary,
     WindowComparisonOutput,
 )
-import time
-from typing import cast
-
 from jaeger_mcp.shaping import (
     _LIST_CAP,
     _MD_ITEM_LIMIT,
@@ -57,8 +58,6 @@ from jaeger_mcp.shaping import (
     build_execution_tree as _build_execution_tree,
     compare_traces_diff as _compare_traces_diff,
     compare_windows,
-    compute_deviation_score,
-    compute_z_score,
     detect_anomalies,
     find_critical_path,
     find_root_span as _find_root_span,
@@ -68,7 +67,6 @@ from jaeger_mcp.shaping import (
     span_is_error as _span_is_error,
     truncation_hint as _truncation_hint,
 )
-
 
 # ── Tools ──────────────────────────────────────────────────────────────────
 
@@ -974,7 +972,7 @@ async def jaeger_critical_path(
         # Format critical path output
         formatted_critical_path = [
             _format_critical_path_span(span, cum_dur, total_duration_us, processes)
-            for span, cum_dur in zip(critical_path_spans, cumulative_durations)
+            for span, cum_dur in zip(critical_path_spans, cumulative_durations, strict=False)
         ]
 
         # Rank bottlenecks
@@ -1010,12 +1008,15 @@ async def jaeger_critical_path(
         }
 
         # Generate markdown summary
-        md = f"## Critical Path Analysis\n\n"
+        md = "## Critical Path Analysis\n\n"
         md += f"- **Trace ID:** `{trace_id_actual}`\n"
         if root_operation:
             md += f"- **Root Operation:** `{root_operation}`\n"
         md += f"- **Total Duration:** {total_duration_us:,}μs ({total_duration_us / 1000000:.3f}s)\n"
-        md += f"- **Critical Path Duration:** {critical_path_duration_us:,}μs ({critical_path_duration_us / 1000000:.3f}s)\n"
+        md += (
+            f"- **Critical Path Duration:** {critical_path_duration_us:,}μs "
+            f"({critical_path_duration_us / 1000000:.3f}s)\n"
+        )
         md += f"- **Critical Path Percentage:** {critical_path_percentage:.1f}%\n"
         md += f"- **Bottlenecks Found:** {len(formatted_bottlenecks)}\n\n"
 
@@ -1024,7 +1025,11 @@ async def jaeger_critical_path(
             md += "| Operation | Service | Duration | Cumulative | % of Total |\n"
             md += "|-----------|---------|----------|------------|------------|\n"
             for span in formatted_critical_path:
-                md += f"| `{span['operation']}` | `{span['service']}` | {span['duration_us']:,}μs | {span['cumulative_duration_us']:,}μs | {span['percentage_of_total']:.1f}% |\n"
+                md += (
+                    f"| `{span['operation']}` | `{span['service']}` "
+                    f"| {span['duration_us']:,}μs | {span['cumulative_duration_us']:,}μs "
+                    f"| {span['percentage_of_total']:.1f}% |\n"
+                )
             md += "\n"
 
         if formatted_bottlenecks:
@@ -1032,7 +1037,11 @@ async def jaeger_critical_path(
             md += "| Operation | Service | Duration | Self-Time | % of Total |\n"
             md += "|-----------|---------|----------|-----------|------------|\n"
             for span in formatted_bottlenecks[:10]:  # Show top 10
-                md += f"| `{span['operation']}` | `{span['service']}` | {span['duration_us']:,}μs | {span['self_time_us']:,}μs | {span['self_time_percentage']:.1f}% |\n"
+                md += (
+                    f"| `{span['operation']}` | `{span['service']}` "
+                    f"| {span['duration_us']:,}μs | {span['self_time_us']:,}μs "
+                    f"| {span['self_time_percentage']:.1f}% |\n"
+                )
             if len(formatted_bottlenecks) > 10:
                 md += f"\n*... and {len(formatted_bottlenecks) - 10} more (showing top 10)*\n"
 
@@ -1133,9 +1142,6 @@ async def jaeger_compare_windows(
         WindowComparisonOutput with per-operation diffs and summary statistics.
     """
     try:
-        import time
-        from typing import cast
-
         client = await get_client()
 
         # Convert timestamps to milliseconds for Jaeger API
@@ -1221,17 +1227,23 @@ async def jaeger_compare_windows(
         }
 
         # Generate markdown summary
-        md = f"## Window Comparison Analysis\n\n"
+        md = "## Window Comparison Analysis\n\n"
         md += f"- **Service:** `{service}`\n"
         if operation:
             md += f"- **Operation Filter:** `{operation}`\n"
-        md += f"- **Baseline Window:** {baseline_start // 1000000} → {baseline_end // 1000000} (Δ={(baseline_end - baseline_start) // 1000000}s)\n"
-        md += f"- **Comparison Window:** {comparison_start // 1000000} → {comparison_end // 1000000} (Δ={(comparison_end - comparison_start) // 1000000}s)\n"
+        md += (
+            f"- **Baseline Window:** {baseline_start // 1000000} → {baseline_end // 1000000} "
+            f"(Δ={(baseline_end - baseline_start) // 1000000}s)\n"
+        )
+        md += (
+            f"- **Comparison Window:** {comparison_start // 1000000} → {comparison_end // 1000000} "
+            f"(Δ={(comparison_end - comparison_start) // 1000000}s)\n"
+        )
         md += f"- **Traces Analyzed:** {len(baseline_traces)} baseline, {len(comparison_traces)} comparison\n"
         md += f"- **Operations Compared:** {operation_count}\n"
         md += f"- **Overall Deviation Score:** {overall_deviation_score:.3f}\n\n"
 
-        md += f"### Summary\n\n"
+        md += "### Summary\n\n"
         md += f"- **Added Operations:** {added_count} | "
         md += f"**Removed Operations:** {removed_count}\n"
         md += f"- **Faster Operations:** {faster_count} | "
@@ -1267,7 +1279,10 @@ async def jaeger_compare_windows(
                 p95_display = f"{p95_delta_pct:+.1f}%" if abs(p95_delta_pct) >= 0.1 else "0%"
                 error_display = f"{error_delta:+.2f}" if abs(error_delta) >= 0.01 else "0.00"
 
-                md += f"| `{operation_name}` | {change_display} | {count_display} | {p95_display} | {error_display} | {deviation:.3f} |\n"
+                md += (
+                    f"| `{operation_name}` | {change_display} | {count_display} "
+                    f"| {p95_display} | {error_display} | {deviation:.3f} |\n"
+                )
 
             if len(diff_results) > 15:
                 md += f"\n*... and {len(diff_results) - 15} more operations (showing top 15)*\n"
@@ -1350,8 +1365,6 @@ async def jaeger_detect_anomalies(
         AnomalyDetectionOutput with flagged operations and severity scores.
     """
     try:
-        import time
-
         client = await get_client()
 
         # Calculate time windows
@@ -1425,7 +1438,7 @@ async def jaeger_detect_anomalies(
         }
 
         # Generate markdown summary
-        md = f"## Anomaly Detection Results\n\n"
+        md = "## Anomaly Detection Results\n\n"
         md += f"- **Service:** `{service}`\n"
         md += (
             f"- **Baseline Window:** {baseline_duration_minutes} minutes ago → {current_duration_minutes} minutes ago\n"
@@ -1470,7 +1483,10 @@ async def jaeger_detect_anomalies(
                     "low": "🟢 Low",
                 }.get(severity, severity)
 
-                md += f"| `{operation}` | {anomaly_type} | {stat} | {current_display} | {baseline_display} | {z_score:+.2f} | {severity_display} |\n"
+                md += (
+                    f"| `{operation}` | {anomaly_type} | {stat} | {current_display} "
+                    f"| {baseline_display} | {z_score:+.2f} | {severity_display} |\n"
+                )
 
             if len(anomaly_results) > 15:
                 md += f"\n*... and {len(anomaly_results) - 15} more anomalies (showing top 15)*\n"
@@ -1490,7 +1506,8 @@ async def jaeger_detect_anomalies(
 # ── Predictive Analytics ─────────────────────────────────────────────────
 
 
-from .predictive.tools import (
-    jaeger_predict_degradation,
-    jaeger_forecast_capacity,
-)
+# Importing predictive.tools runs its @mcp.tool decorators, registering the
+# predictive tools on the shared FastMCP instance. The bound names are unused
+# here — the import is kept purely for that registration side-effect.
+from . import predictive  # noqa: E402,F401
+from .predictive import tools as _predictive_tools  # noqa: E402,F401

@@ -31,7 +31,7 @@ from typing import Any
 
 from jaeger_mcp.client import JaegerHTTPClient
 from jaeger_mcp.models import AnomalyDetectionOutput, CriticalPathOutput, WindowComparisonOutput
-from jaeger_mcp.predictive.models import PredictionResult, ForecastResult
+from jaeger_mcp.predictive.models import ForecastResult, PredictionResult
 from jaeger_mcp.shaping import (
     _build_span_tree,
     _format_bottleneck_span,
@@ -39,7 +39,6 @@ from jaeger_mcp.shaping import (
     aggregate_span_statistics as _aggregate_span_statistics,
     compare_traces_diff as _compare_traces_diff,
     compare_windows,
-    compute_z_score,
     detect_anomalies,
     find_critical_path,
     find_root_span as _find_root_span,
@@ -48,7 +47,6 @@ from jaeger_mcp.shaping import (
     span_is_error as _span_is_error,
     span_tags_flat as _span_tags_flat,
 )
-
 
 # ── Domain objects ────────────────────────────────────────────────────────
 
@@ -673,7 +671,7 @@ class JaegerClient:
         # Format critical path output
         formatted_critical_path = [
             _format_critical_path_span(span, cum_dur, total_duration_us, processes)
-            for span, cum_dur in zip(critical_path_spans, cumulative_durations)
+            for span, cum_dur in zip(critical_path_spans, cumulative_durations, strict=False)
         ]
 
         # Rank bottlenecks
@@ -768,7 +766,7 @@ class JaegerClient:
         results = await self._http.aget_many(endpoints)
 
         traces = []
-        for tid, data in zip(trace_ids, results):
+        for tid, data in zip(trace_ids, results, strict=False):
             data = data or {}
             traces_data: list[dict[str, Any]] = data.get("data") or []
             if not traces_data:
@@ -997,7 +995,7 @@ class JaegerClient:
             raise ValueError("current_duration_minutes must be between 1 and 60")
 
         from jaeger_mcp._mcp import get_client
-        from jaeger_mcp.shaping import aggregate_span_statistics as _aggregate_span_statistics, detect_anomalies
+        from jaeger_mcp.shaping import aggregate_span_statistics as _aggregate_span_statistics
 
         client = await get_client()
 

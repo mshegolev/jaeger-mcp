@@ -8,8 +8,8 @@ httpx exceptions.
 
 from __future__ import annotations
 
-import pytest
 import httpx
+import pytest
 
 from jaeger_mcp.errors import ConfigError, handle
 

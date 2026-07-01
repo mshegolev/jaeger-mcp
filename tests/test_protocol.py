@@ -78,6 +78,44 @@ EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
         "required_params": {"trace_id"},
         "optional_params": set(),
     },
+    "jaeger_compare_windows": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "required_params": {
+            "service",
+            "baseline_start",
+            "baseline_end",
+            "comparison_start",
+            "comparison_end",
+        },
+        "optional_params": {"operation", "limit"},
+    },
+    "jaeger_detect_anomalies": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "required_params": {"service"},
+        "optional_params": {
+            "baseline_duration_minutes",
+            "sensitivity",
+            "current_duration_minutes",
+        },
+    },
+    "jaeger_predict_degradation": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "required_params": {"service"},
+        "optional_params": {"hours_back"},
+    },
+    "jaeger_forecast_capacity": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "required_params": {"service"},
+        "optional_params": {"days_ahead"},
+    },
 }
 
 
@@ -87,7 +125,7 @@ def listed_tools() -> list[Any]:
     return asyncio.run(mcp.list_tools())
 
 
-def test_all_seven_tools_registered(listed_tools: list[Any]) -> None:
+def test_all_tools_registered(listed_tools: list[Any]) -> None:
     names = {t.name for t in listed_tools}
     assert names == set(EXPECTED_TOOLS), (
         f"tool list mismatch.\n  registered: {sorted(names)}\n  expected:   {sorted(EXPECTED_TOOLS)}"

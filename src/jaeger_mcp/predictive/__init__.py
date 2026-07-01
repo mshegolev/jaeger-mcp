@@ -8,7 +8,7 @@ proactive insights by applying predictive modeling to trace data patterns.
 
 # Import key classes and functions for easy access
 try:
-    from .models import PredictionResult, ForecastResult, RootCausePrediction, WarningAlert
+    from .models import ForecastResult, PredictionResult, RootCausePrediction, WarningAlert
 
     __all__ = ["PredictionResult", "ForecastResult", "RootCausePrediction", "WarningAlert"]
 except ImportError:

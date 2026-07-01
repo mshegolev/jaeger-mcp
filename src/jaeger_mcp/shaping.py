@@ -14,7 +14,6 @@ from jaeger_mcp.models import (
     BottleneckSpan,
     ChangedSpan,
     CompareTracesOutput,
-    CriticalPathOutput,
     CriticalPathSpan,
     ExecutionNode,
     MatchedSpanSummary,
@@ -280,11 +279,11 @@ def compare_traces_diff(
                 unchanged_count += 1
 
         # Extras in A → removed
-        for i in range(paired, len(list_a)):
+        for _ in range(paired, len(list_a)):
             removed_spans.append(_make_summary(key))
 
         # Extras in B → added
-        for i in range(paired, len(list_b)):
+        for _ in range(paired, len(list_b)):
             added_spans.append(_make_summary(key))
 
     return {

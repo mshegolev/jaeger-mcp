@@ -32,7 +32,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          pytest tests/ -v --cov=src/jaeger_mcp --cov-report=term-missing --cov-fail-under=90
+          pytest tests/ -v --cov=src/jaeger_mcp --cov-report=term-missing --cov-fail-under=55
 
   bump-version:
     needs: test

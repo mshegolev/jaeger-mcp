@@ -2,10 +2,10 @@
 Performance degradation prediction model.
 """
 
-from typing import List, Tuple, Optional
 from datetime import datetime, timedelta
-from .models import PredictionResult
+
 from ..shaping import shape_trace_summary
+from .models import PredictionResult
 
 
 class PerformanceDegradationModel:
@@ -19,9 +19,9 @@ class PerformanceDegradationModel:
     def predict_degradation(
         self,
         service_name: str,
-        historical_data: List[dict],
-        critical_path_trends: List[dict],
-        anomaly_detections: List[dict],
+        historical_data: list[dict],
+        critical_path_trends: list[dict],
+        anomaly_detections: list[dict],
     ) -> PredictionResult:
         """
         Predict potential performance degradation events.
@@ -66,7 +66,7 @@ class PerformanceDegradationModel:
             recommendations=recommendations,
         )
 
-    def _analyze_latency_trends(self, historical_data: List[dict]) -> float:
+    def _analyze_latency_trends(self, historical_data: list[dict]) -> float:
         """
         Analyze historical latency patterns to predict degradation.
 
@@ -120,7 +120,7 @@ class PerformanceDegradationModel:
         else:
             return 0.0  # No increasing trend
 
-    def _analyze_critical_path_trends(self, critical_path_trends: List[dict]) -> float:
+    def _analyze_critical_path_trends(self, critical_path_trends: list[dict]) -> float:
         """
         Analyze critical path trends to predict degradation.
 
@@ -174,7 +174,7 @@ class PerformanceDegradationModel:
         else:
             return 0.0
 
-    def _analyze_anomaly_detections(self, anomaly_detections: List[dict]) -> float:
+    def _analyze_anomaly_detections(self, anomaly_detections: list[dict]) -> float:
         """
         Analyze anomaly detections to predict degradation.
 
@@ -202,7 +202,7 @@ class PerformanceDegradationModel:
 
     def _generate_contributing_factors(
         self, latency_score: float, critical_path_score: float, anomaly_score: float
-    ) -> List[str]:
+    ) -> list[str]:
         """Generate contributing factors based on scores."""
         factors = []
         if latency_score > 0.3:
@@ -215,7 +215,7 @@ class PerformanceDegradationModel:
             factors.append("No significant contributing factors identified")
         return factors
 
-    def _generate_recommendations(self, factors: List[str]) -> List[str]:
+    def _generate_recommendations(self, factors: list[str]) -> list[str]:
         """Generate recommendations based on contributing factors."""
         recommendations = []
         if "Increasing latency patterns detected" in factors:
@@ -231,7 +231,7 @@ class PerformanceDegradationModel:
 
 # Convenience function for easier access
 def predict_performance_degradation(
-    service_name: str, historical_data: List[dict], critical_path_trends: List[dict], anomaly_detections: List[dict]
+    service_name: str, historical_data: list[dict], critical_path_trends: list[dict], anomaly_detections: list[dict]
 ) -> PredictionResult:
     """
     Predict potential performance degradation events.

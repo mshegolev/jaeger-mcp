@@ -43,7 +43,7 @@ class TestRequestLogging:
         client = JaegerHTTPClient(retry_attempts=0, cache_ttl=0)
         try:
             with caplog.at_level(logging.INFO, logger="jaeger_mcp.client"):
-                with pytest.raises(Exception):
+                with pytest.raises(httpx.HTTPStatusError):
                     await client.aget("/services")
             # Should have logged both the 400 status and ERR
             log_msgs = [r.message for r in caplog.records]
@@ -57,7 +57,7 @@ class TestSSLWarningLog:
         """SSL verify disabled emits WARNING log."""
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
         with caplog.at_level(logging.WARNING, logger="jaeger_mcp.client"):
-            client = JaegerHTTPClient(ssl_verify=False)
+            JaegerHTTPClient(ssl_verify=False)  # construction emits the warning
         warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("ssl_verify=false" in m for m in warning_msgs)
 
@@ -65,6 +65,6 @@ class TestSSLWarningLog:
         """SSL verify enabled does NOT emit warning."""
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
         with caplog.at_level(logging.WARNING, logger="jaeger_mcp.client"):
-            client = JaegerHTTPClient(ssl_verify=True)
+            JaegerHTTPClient(ssl_verify=True)  # construction must NOT warn
         warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
         assert not any("ssl_verify" in m for m in warning_msgs)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -12,7 +12,6 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from jaeger_mcp import output
 from jaeger_mcp.client import JaegerHTTPClient
-
 
 # ── output.ok() edge cases ───────────────────────────────────────────────
 
@@ -96,7 +95,7 @@ class TestShutdownLogging:
         monkeypatch.setattr(mcp_mod, "_client", mock_client)
 
         with caplog.at_level(logging.WARNING, logger="jaeger_mcp._mcp"):
-            async with mcp_mod.app_lifespan(mock_app) as ctx:
+            async with mcp_mod.app_lifespan(mock_app):
                 pass  # simulate normal server run
 
         # The aclose() was called and the exception was logged (not raised)

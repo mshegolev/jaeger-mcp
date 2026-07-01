@@ -13,7 +13,6 @@ the business logic; ``@mcp.tool`` only registers them with FastMCP.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest

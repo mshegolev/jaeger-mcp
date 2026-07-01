@@ -4,17 +4,17 @@ MCP tools for predictive analytics.
 
 from __future__ import annotations
 
-from typing import Annotated
 from datetime import datetime, timedelta
+from typing import Annotated
 
 from pydantic import Field
 
 from jaeger_mcp import output
 from jaeger_mcp._mcp import get_client, mcp
-from jaeger_mcp.models import SearchTracesOutput
-from .models import PredictionResult, ForecastResult
-from .performance_model import predict_performance_degradation
+
 from .forecasting import forecast_service_capacity
+from .models import ForecastResult, PredictionResult
+from .performance_model import predict_performance_degradation
 
 
 @mcp.tool(

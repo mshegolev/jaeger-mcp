@@ -3,7 +3,8 @@ Data models for predictive analytics.
 """
 
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -13,8 +14,8 @@ class PredictionResult(BaseModel):
     service_name: str = Field(..., description="Name of the service")
     predicted_degradation_time: datetime = Field(..., description="Predicted time of degradation")
     confidence_level: float = Field(..., ge=0.0, le=1.0, description="Confidence level (0.0 to 1.0)")
-    contributing_factors: List[str] = Field(default_factory=list, description="Factors contributing to prediction")
-    recommendations: List[str] = Field(default_factory=list, description="Recommended actions")
+    contributing_factors: list[str] = Field(default_factory=list, description="Factors contributing to prediction")
+    recommendations: list[str] = Field(default_factory=list, description="Recommended actions")
 
 
 class ForecastResult(BaseModel):
@@ -26,7 +27,7 @@ class ForecastResult(BaseModel):
     predicted_throughput: int = Field(..., ge=0, description="Predicted throughput (requests per time unit)")
     confidence_interval_low: int = Field(..., ge=0, description="Lower bound of confidence interval")
     confidence_interval_high: int = Field(..., ge=0, description="Upper bound of confidence interval")
-    resource_requirements: Dict[str, Any] = Field(default_factory=dict, description="Resource requirements")
+    resource_requirements: dict[str, Any] = Field(default_factory=dict, description="Resource requirements")
 
 
 class RootCausePrediction(BaseModel):
@@ -34,8 +35,8 @@ class RootCausePrediction(BaseModel):
 
     service_name: str = Field(..., description="Name of the service")
     incident_time: datetime = Field(..., description="Time of incident")
-    root_cause_candidates: List[Dict[str, Any]] = Field(..., description="List of potential root causes with scores")
-    confidence_scores: List[float] = Field(..., description="Confidence scores for each candidate")
+    root_cause_candidates: list[dict[str, Any]] = Field(..., description="List of potential root causes with scores")
+    confidence_scores: list[float] = Field(..., description="Confidence scores for each candidate")
 
 
 class WarningAlert(BaseModel):
@@ -46,5 +47,5 @@ class WarningAlert(BaseModel):
     predicted_issue_time: datetime = Field(..., description="Predicted time of performance issue")
     time_horizon_hours: int = Field(..., ge=2, le=24, description="Time horizon in hours (2-24)")
     severity_level: str = Field(..., description="Severity level (low, medium, high, critical)")
-    affected_operations: List[str] = Field(default_factory=list, description="Operations likely to be affected")
-    recommended_actions: List[str] = Field(default_factory=list, description="Recommended actions to prevent issue")
+    affected_operations: list[str] = Field(default_factory=list, description="Operations likely to be affected")
+    recommended_actions: list[str] = Field(default_factory=list, description="Recommended actions to prevent issue")

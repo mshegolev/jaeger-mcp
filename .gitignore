@@ -23,6 +23,10 @@ htmlcov/
 .tox/
 .nox/
 coverage.xml
+.benchmarks/
+
+# Debug scratch artifacts
+debug_*.txt
 
 # Ruff / type-checking
 .ruff_cache/

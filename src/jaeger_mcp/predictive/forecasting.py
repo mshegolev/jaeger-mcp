@@ -2,10 +2,11 @@
 Capacity forecasting and throughput prediction.
 """
 
-from typing import List, Dict, Any, Tuple
 from datetime import datetime, timedelta
-from .models import ForecastResult
+from typing import Any
+
 from ..shaping import shape_trace_summary
+from .models import ForecastResult
 
 
 class CapacityForecastingModel:
@@ -17,7 +18,7 @@ class CapacityForecastingModel:
         self.seasonal_periods = 7  # Weekly seasonality
 
     def forecast_capacity(
-        self, service_name: str, historical_volume: List[dict], seasonal_patterns: List[dict]
+        self, service_name: str, historical_volume: list[dict], seasonal_patterns: list[dict]
     ) -> ForecastResult:
         """
         Forecast future throughput demands and resource requirements.
@@ -68,7 +69,7 @@ class CapacityForecastingModel:
             resource_requirements=resource_requirements,
         )
 
-    def _extract_throughput_data(self, historical_volume: List[dict]) -> List[int]:
+    def _extract_throughput_data(self, historical_volume: list[dict]) -> list[int]:
         """
         Extract throughput data from historical volume patterns.
 
@@ -97,7 +98,7 @@ class CapacityForecastingModel:
 
         return throughput
 
-    def _simple_forecast(self, throughput_data: List[int]) -> List[float]:
+    def _simple_forecast(self, throughput_data: list[int]) -> list[float]:
         """
         Simple forecasting using moving average with trend.
 
@@ -134,7 +135,7 @@ class CapacityForecastingModel:
 
         return forecast
 
-    def _calculate_confidence_intervals(self, forecast_values: List[float]) -> Tuple[int, int]:
+    def _calculate_confidence_intervals(self, forecast_values: list[float]) -> tuple[int, int]:
         """
         Calculate confidence intervals for forecast values.
 
@@ -164,7 +165,7 @@ class CapacityForecastingModel:
 
         return (lower_bound, upper_bound)
 
-    def _estimate_resource_requirements(self, forecast_values: List[float]) -> Dict[str, Any]:
+    def _estimate_resource_requirements(self, forecast_values: list[float]) -> dict[str, Any]:
         """
         Estimate resource requirements based on forecasted throughput.
 
@@ -232,7 +233,7 @@ class CapacityForecastingModel:
 
 # Convenience function for easier access
 def forecast_service_capacity(
-    service_name: str, historical_volume: List[dict], seasonal_patterns: List[dict]
+    service_name: str, historical_volume: list[dict], seasonal_patterns: list[dict]
 ) -> ForecastResult:
     """
     Forecast future throughput demands and resource requirements.
