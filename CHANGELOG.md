@@ -1,3 +1,9 @@
+## [0.5.1] — 2026-07-01
+
+### Added
+
+- Automated version bump
+
 # Changelog
 
 All notable changes to `jaeger-mcp` will be documented in this file.
