@@ -1393,9 +1393,12 @@ class JaegerClient:
                 continue
 
             if classification == "regressed":
-                severity_score = min(
-                    100,
-                    round(diff["p95_delta_pct"] * 50 + error_rate_delta * 200),
+                severity_score = max(
+                    0,
+                    min(
+                        100,
+                        round(diff["p95_delta_pct"] * 50 + error_rate_delta * 200),
+                    ),
                 )
             else:
                 severity_score = 0
