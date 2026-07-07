@@ -1509,5 +1509,9 @@ async def jaeger_detect_anomalies(
 # Importing predictive.tools runs its @mcp.tool decorators, registering the
 # predictive tools on the shared FastMCP instance. The bound names are unused
 # here — the import is kept purely for that registration side-effect.
-from . import predictive  # noqa: E402,F401
+# ── QA / Test Intelligence tools ─────────────────────────────────────────────
+from . import (
+    predictive,  # noqa: E402,F401
+    qa_tools as _qa_tools,  # noqa: E402,F401
+)
 from .predictive import tools as _predictive_tools  # noqa: E402,F401
