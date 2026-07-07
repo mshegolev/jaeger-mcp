@@ -288,3 +288,26 @@ class AnomalyDetectionOutput(TypedDict):
     latency_anomalies: int
     error_rate_anomalies: int
     sensitivity: float
+
+
+# ── QA Test Trace Correlation ────────────────────────────────────────────────
+
+
+class TestTraceMatch(TypedDict):
+    """A single trace matching the supplied tag query."""
+
+    trace_id: str
+    root_service: str | None
+    duration_ms: int
+    start_time: str
+    has_error: bool
+    span_count: int
+
+
+class FindTestTracesOutput(TypedDict):
+    """Aggregated result of jaeger_find_test_traces."""
+
+    traces: list[TestTraceMatch]
+    total_count: int
+    tag_query: dict[str, str]
+    service_filter: str | None
