@@ -11,6 +11,7 @@
 - SHIPPED **M5: Trace Analysis** — Phases 8-10 (shipped 2026-06-16)
 - SHIPPED **v0.4.0: Advanced Trace Analytics** — Phases 11-15 (shipped 2026-06-18)
 - SHIPPED **v0.5.0: Predictive Analytics** — Phase 16 (shipped 2026-06-19)
+- ACTIVE **v0.6.0: QA/Test Intelligence** — Phases 17-20
 
 ## Phases
 
@@ -54,7 +55,7 @@
 
 </details>
 
-### v0.4.0: Advanced Trace Analytics (Phases 11-15)
+### v0.4.0: Advanced Trace Analytics (Phases 11-15) — SHIPPED 2026-06-18
 
 - [x] **Phase 11: Async Transport** — Migrate to async HTTP, concurrent fetching, streaming for scale
 - [x] **Phase 12: Critical Path Analysis** — Longest-duration span chain and bottleneck ranking
@@ -65,6 +66,13 @@
 ### v0.5.0: Predictive Analytics (Phase 16) — SHIPPED 2026-06-19
 
 - [x] **Phase 16: Predictive Analytics** — PRED-01, PRED-02, PRED-03, PRED-04, PRED-05, PRED-06
+
+### v0.6.0: QA/Test Intelligence (Phases 17-20)
+
+- [ ] **Phase 17: Test Trace Correlation** - Find Jaeger traces by Allure/pytest test tags via new MCP tool + facade
+- [ ] **Phase 18: Regression Trace Diff** - Detect per-operation regressions across two time windows via new MCP tool + facade
+- [ ] **Phase 19: Test Performance Profiling** - Aggregate per-operation hotspots across a tagged test run via new MCP tool + facade
+- [ ] **Phase 20: Flakiness Detection & Release v0.6.0** - Distinguish flaky vs regressed operations + version bump, changelog, README
 
 ## Phase Details
 
@@ -139,6 +147,54 @@ Plans:
   5. `JaegerClient.forecast_capacity()` returns the same analysis programmatically for in-process use
   6. All new tools integrate seamlessly with existing JaegerClient architecture
 
+### Phase 17: Test Trace Correlation
+**Goal**: QA engineers can find all Jaeger traces for a specific test run or Allure test case without knowing the exact tag schema in advance
+**Depends on**: Phase 16 (established tool and facade patterns)
+**Requirements**: TTC-01, TTC-02, TTC-03, TTC-04
+**Success Criteria** (what must be TRUE):
+  1. User calls `jaeger_find_test_traces` with an Allure tag (e.g. `allure.id=TC-42`) and receives matching traces sorted by start time
+  2. User calls `jaeger_find_test_traces` with a pytest tag (e.g. `test.run_id=abc123`) through the same unified tag-map parameter — no separate tool call needed per schema
+  3. Each result includes trace ID, root service, total duration, start time, error status (bool), and span count
+  4. `JaegerClient.find_test_traces()` returns the same data programmatically for in-process use by the investigator
+**Plans:** 2 plans
+Plans:
+- [ ] phase-17-01-PLAN.md — TypedDicts + jaeger_find_test_traces MCP tool + tools.py registration
+- [ ] phase-17-02-PLAN.md — find_test_traces() facade method + test_qa_tools.py + test_protocol.py update
+
+### Phase 18: Regression Trace Diff
+**Goal**: Deployment gates and QA engineers can detect per-operation performance regressions by comparing trace behavior across two independently configurable time windows
+**Depends on**: Phase 17
+**Requirements**: REG-01, REG-02, REG-03, REG-04, REG-05
+**Success Criteria** (what must be TRUE):
+  1. User calls `jaeger_regression_diff` with a service name and two time windows and receives operations classified as regressed / recovered / appeared / removed
+  2. Each operation shows latency delta (absolute ms + %) and error rate delta between baseline and comparison windows
+  3. Each operation carries a numeric severity score (0–100) enabling triage by impact magnitude; default comparison window is the last 15 minutes
+  4. `JaegerClient.regression_diff()` returns the same analysis programmatically
+**Plans**: TBD
+
+### Phase 19: Test Performance Profiling
+**Goal**: QA engineers can see a ranked breakdown of operation performance across all traces from a tagged test run, with the most expensive operations immediately visible
+**Depends on**: Phase 18
+**Requirements**: PROF-01, PROF-02, PROF-03, PROF-04
+**Success Criteria** (what must be TRUE):
+  1. User calls `jaeger_test_profile` with a tag key/value pair (e.g. `test.run_id=abc123`) and receives aggregated per-operation stats for all traces in that run
+  2. Each operation row shows total wall time, call count, mean/p50/p95/p99 latency (ms), and error count
+  3. Results are ordered by total wall time descending — the most expensive operations appear first without manual sorting
+  4. `JaegerClient.test_profile()` returns the same analysis programmatically
+**Plans**: TBD
+
+### Phase 20: Flakiness Detection & Release v0.6.0
+**Goal**: QA engineers can distinguish flaky operations from systematic regressions in a service's recent traces, and v0.6.0 is published with complete documentation reflecting all four new QA tools
+**Depends on**: Phase 19
+**Requirements**: FLAK-01, FLAK-02, FLAK-03, FLAK-04, FLAK-05, REL-07, REL-08, REL-09
+**Success Criteria** (what must be TRUE):
+  1. User calls `jaeger_flakiness_report` for a service and receives operations bucketed into three groups: flaky, regressed, and healthy
+  2. The flaky bucket uses CV (coefficient of variation) — high variance, inconsistent errors across requests; the regressed bucket identifies shifted mean with consistent errors
+  3. The lookback window defaults to 1 hour (consistent with `jaeger_detect_anomalies`) and is user-configurable
+  4. `JaegerClient.flakiness_report()` returns the same analysis programmatically
+  5. `pyproject.toml` shows version 0.6.0, CHANGELOG documents all four new QA tools, README shows 16 MCP tools with pytest/Allure integration examples
+**Plans**: TBD
+
 ## Progress Table
 
 | Phase | Milestone | Requirements | Status | Completed |
@@ -159,3 +215,7 @@ Plans:
 | 14. Anomaly Detection | v0.4.0 | ANOM-01..06 | Done | 2026-06-18 |
 | 15. Release v0.4.0 | v0.4.0 | REL-04..06 | Done | 2026-06-18 |
 | 16. Predictive Analytics | v0.5.0 | PRED-01..06 | Done | 2026-06-19 |
+| 17. Test Trace Correlation | v0.6.0 | TTC-01..04 | Not started | - |
+| 18. Regression Trace Diff | v0.6.0 | REG-01..05 | Not started | - |
+| 19. Test Performance Profiling | v0.6.0 | PROF-01..04 | Not started | - |
+| 20. Flakiness Detection & Release v0.6.0 | v0.6.0 | FLAK-01..05, REL-07..09 | Not started | - |
