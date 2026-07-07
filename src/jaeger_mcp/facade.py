@@ -30,7 +30,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from jaeger_mcp.client import JaegerHTTPClient
-from jaeger_mcp.models import AnomalyDetectionOutput, CriticalPathOutput, WindowComparisonOutput
+from jaeger_mcp.models import (
+    AnomalyDetectionOutput,
+    CriticalPathOutput,
+    FindTestTracesOutput,
+    TestTraceMatch,
+    WindowComparisonOutput,
+)
 from jaeger_mcp.predictive.models import ForecastResult, PredictionResult
 from jaeger_mcp.shaping import (
     _build_span_tree,
@@ -1244,6 +1250,102 @@ class JaegerClient:
             self._aforecast_capacity(
                 service,
                 days_ahead=days_ahead,
+            )
+        )
+
+    async def _afind_test_traces(
+        self,
+        tags: dict[str, str],
+        service: str | None = None,
+        lookback_hours: int = 1,
+        limit: int = 50,
+    ) -> FindTestTracesOutput:
+        """Async implementation of :meth:`find_test_traces`."""
+        import json
+
+        _MAX_SERVICES = 20
+
+        if service is not None:
+            services: list[str] = [service]
+        else:
+            svc_data = await self._http.aget("/services") or {}
+            all_services: list[str] = svc_data.get("data") or []
+            services = all_services[:_MAX_SERVICES]
+
+        now_us = int(time.time() * 1_000_000)
+        start_us = now_us - (lookback_hours * 3600 * 1_000_000)
+        tags_str = json.dumps(tags)
+
+        endpoints: list[tuple[str, dict[str, Any] | None]] = [
+            (
+                "/traces",
+                {
+                    "service": svc,
+                    "tags": tags_str,
+                    "start": start_us // 1000,
+                    "end": now_us // 1000,
+                    "limit": limit,
+                },
+            )
+            for svc in services
+        ]
+
+        results = await self._http.aget_many(endpoints)
+
+        seen: set[str] = set()
+        raw_traces: list[dict[str, Any]] = []
+        for res in results:
+            for trace in (res or {}).get("data") or []:
+                tid: str = trace.get("traceID", "")
+                if tid and tid not in seen:
+                    seen.add(tid)
+                    raw_traces.append(trace)
+
+        matches: list[TestTraceMatch] = []
+        for trace in raw_traces:
+            summary = _raw_trace_summary(trace)
+            start_time_us = summary["start_time_us"]
+            if start_time_us is not None:
+                start_iso = datetime.fromtimestamp(start_time_us / 1_000_000, tz=timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
+            else:
+                start_iso = ""
+            matches.append(
+                TestTraceMatch(
+                    trace_id=summary["trace_id"],
+                    root_service=summary["root_service"],
+                    duration_ms=summary["duration_us"] // 1000,
+                    start_time=start_iso,
+                    has_error=summary["errors_count"] > 0,
+                    span_count=summary["span_count"],
+                )
+            )
+
+        matches.sort(key=lambda m: m["start_time"], reverse=True)
+        matches = matches[:limit]
+
+        return FindTestTracesOutput(
+            traces=matches,
+            total_count=len(matches),
+            tag_query=tags,
+            service_filter=service,
+        )
+
+    def find_test_traces(
+        self,
+        tags: dict[str, str],
+        service: str | None = None,
+        lookback_hours: int = 1,
+        limit: int = 50,
+    ) -> FindTestTracesOutput:
+        """Return traces matching ``tags`` for in-process callers."""
+        return asyncio.run(
+            self._afind_test_traces(
+                tags=tags,
+                service=service,
+                lookback_hours=lookback_hours,
+                limit=limit,
             )
         )
 
