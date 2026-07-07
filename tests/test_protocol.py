@@ -116,6 +116,13 @@ EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
         "required_params": {"service"},
         "optional_params": {"days_ahead"},
     },
+    "jaeger_find_test_traces": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "required_params": {"tags"},
+        "optional_params": {"service", "lookback_hours", "limit"},
+    },
 }
 
 
