@@ -69,7 +69,7 @@
 
 ### v0.6.0: QA/Test Intelligence (Phases 17-20)
 
-- [ ] **Phase 17: Test Trace Correlation** - Find Jaeger traces by Allure/pytest test tags via new MCP tool + facade
+- [x] **Phase 17: Test Trace Correlation** - Find Jaeger traces by Allure/pytest test tags via new MCP tool + facade (completed 2026-07-07)
 - [ ] **Phase 18: Regression Trace Diff** - Detect per-operation regressions across two time windows via new MCP tool + facade
 - [ ] **Phase 19: Test Performance Profiling** - Aggregate per-operation hotspots across a tagged test run via new MCP tool + facade
 - [ ] **Phase 20: Flakiness Detection & Release v0.6.0** - Distinguish flaky vs regressed operations + version bump, changelog, README
@@ -77,69 +77,87 @@
 ## Phase Details
 
 ### Phase 11: Async Transport
+
 **Goal**: The system handles deep traces (500+ spans) and wide queries (100+ traces) without timeouts or memory pressure, while preserving the existing sync API for backward compatibility
 **Depends on**: Nothing (foundational for this milestone)
 **Requirements**: ASYNC-01, ASYNC-02, ASYNC-03, ASYNC-04
 **Success Criteria** (what must be TRUE):
+
   1. All existing MCP tools and facade methods continue to pass their tests without modification (backward compatibility)
   2. Fetching 10+ traces concurrently completes faster than sequential fetching by at least 3x
   3. A trace with 500+ spans can be fetched and processed without the response being fully buffered in memory before processing begins
   4. The sync `JaegerClient` API works identically to before — callers do not need to use `async/await`
+
 **Plans:** 3 plans
 Plans:
+
 - [ ] 11-01-PLAN.md — Async HTTP transport foundation (httpx + retry + errors + test migration)
 - [ ] 11-02-PLAN.md — Async MCP integration + sync facade preservation
 - [ ] 11-03-PLAN.md — Concurrent fetching + streaming for large traces
 
 ### Phase 12: Critical Path Analysis
+
 **Goal**: Users can identify the longest-duration span chain and the highest self-time bottleneck spans in any trace
 **Depends on**: Phase 11 (uses async transport for trace fetching)
 **Requirements**: CRIT-01, CRIT-02, CRIT-03, CRIT-04
 **Success Criteria** (what must be TRUE):
+
   1. User can call `jaeger_critical_path` with a trace ID and receive the root-to-leaf span chain that accounts for the most wall-clock time
   2. Each span in the critical path output shows operation, service, duration, and percentage of total trace duration
   3. User can see top-N spans ranked by self-time (exclusive duration) to find the actual bottleneck operations
   4. `JaegerClient.critical_path()` returns the same analysis programmatically for in-process use
+
 **Plans**: TBD
 
 ### Phase 13: Batch Window Comparison
+
 **Goal**: Users can compare aggregate trace behavior between two time periods to detect performance regressions or improvements across deployments
 **Depends on**: Phase 11 (concurrent trace fetching for batch queries)
 **Requirements**: BATCH-01, BATCH-02, BATCH-03, BATCH-04, BATCH-05
 **Success Criteria** (what must be TRUE):
+
   1. User can call `jaeger_compare_windows` with a service name, baseline time window, and comparison time window, and receive a summary of behavioral changes
   2. The output lists per-operation diffs showing which operations were added, removed, became slower, or became faster
   3. Each operation and the overall comparison include a numeric deviation score indicating the magnitude of change
   4. `JaegerClient.compare_windows()` returns the same analysis programmatically for in-process use
+
 **Plans**: TBD
 
 ### Phase 14: Anomaly Detection
+
 **Goal**: Users can scan a service's recent traces and get flagged operations with statistically significant latency spikes or error-rate increases
 **Depends on**: Phase 11 (async fetching for historical baseline), builds on span_statistics patterns from Phase 9
 **Requirements**: ANOM-01, ANOM-02, ANOM-03, ANOM-04, ANOM-05, ANOM-06
 **Success Criteria** (what must be TRUE):
+
   1. User can call `jaeger_detect_anomalies` for a service and receive a list of operations with anomalous latency or error rates
   2. The tool computes a statistical baseline from a configurable historical time window (defaulting to the last 1 hour)
   3. Operations with p95/p99 latency significantly above baseline are flagged as latency anomalies
   4. Operations with error rates significantly above baseline are flagged as error-rate anomalies
   5. Users can tune anomaly sensitivity via configurable sigma/percentile thresholds
+
 **Plans**: TBD
 
 ### Phase 15: Release v0.4.0
+
 **Goal**: v0.4.0 is published with complete documentation reflecting 10 MCP tools and all new analytics capabilities
 **Depends on**: Phases 11-14 (all features complete)
 **Requirements**: REL-04, REL-05, REL-06
 **Success Criteria** (what must be TRUE):
+
   1. `pyproject.toml` shows version 0.4.0 and all tests pass
   2. CHANGELOG contains a v0.4.0 section documenting async transport, critical path, batch comparison, and anomaly detection
   3. README documents 10 MCP tools (up from 7) with usage examples for the new analytics tools
+
 **Plans**: TBD
 
 ### Phase 16: Predictive Analytics
+
 **Goal**: Proactive insights through predictive modeling of trace data patterns
 **Depends on**: Phase 15 (foundation for predictive analytics)
 **Requirements**: PRED-01, PRED-02, PRED-03, PRED-04, PRED-05, PRED-06
 **Success Criteria** (what must be TRUE):
+
   1. User can call `jaeger_predict_degradation` with a service name and receive predictions about likely performance issues 2-24 hours in advance
   2. The tool provides confidence intervals and time horizons for predictions
   3. User can call `jaeger_forecast_capacity` to get throughput demand forecasts for 7-30 days
@@ -148,51 +166,64 @@ Plans:
   6. All new tools integrate seamlessly with existing JaegerClient architecture
 
 ### Phase 17: Test Trace Correlation
+
 **Goal**: QA engineers can find all Jaeger traces for a specific test run or Allure test case without knowing the exact tag schema in advance
 **Depends on**: Phase 16 (established tool and facade patterns)
 **Requirements**: TTC-01, TTC-02, TTC-03, TTC-04
 **Success Criteria** (what must be TRUE):
+
   1. User calls `jaeger_find_test_traces` with an Allure tag (e.g. `allure.id=TC-42`) and receives matching traces sorted by start time
   2. User calls `jaeger_find_test_traces` with a pytest tag (e.g. `test.run_id=abc123`) through the same unified tag-map parameter — no separate tool call needed per schema
   3. Each result includes trace ID, root service, total duration, start time, error status (bool), and span count
   4. `JaegerClient.find_test_traces()` returns the same data programmatically for in-process use by the investigator
-**Plans:** 2 plans
+
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] phase-17-01-PLAN.md — TypedDicts + jaeger_find_test_traces MCP tool + tools.py registration
-- [ ] phase-17-02-PLAN.md — find_test_traces() facade method + test_qa_tools.py + test_protocol.py update
+
+- [x] phase-17-01-PLAN.md — TypedDicts + jaeger_find_test_traces MCP tool + tools.py registration
+- [x] phase-17-02-PLAN.md — find_test_traces() facade method + test_qa_tools.py + test_protocol.py update
 
 ### Phase 18: Regression Trace Diff
+
 **Goal**: Deployment gates and QA engineers can detect per-operation performance regressions by comparing trace behavior across two independently configurable time windows
 **Depends on**: Phase 17
 **Requirements**: REG-01, REG-02, REG-03, REG-04, REG-05
 **Success Criteria** (what must be TRUE):
+
   1. User calls `jaeger_regression_diff` with a service name and two time windows and receives operations classified as regressed / recovered / appeared / removed
   2. Each operation shows latency delta (absolute ms + %) and error rate delta between baseline and comparison windows
   3. Each operation carries a numeric severity score (0–100) enabling triage by impact magnitude; default comparison window is the last 15 minutes
   4. `JaegerClient.regression_diff()` returns the same analysis programmatically
+
 **Plans**: TBD
 
 ### Phase 19: Test Performance Profiling
+
 **Goal**: QA engineers can see a ranked breakdown of operation performance across all traces from a tagged test run, with the most expensive operations immediately visible
 **Depends on**: Phase 18
 **Requirements**: PROF-01, PROF-02, PROF-03, PROF-04
 **Success Criteria** (what must be TRUE):
+
   1. User calls `jaeger_test_profile` with a tag key/value pair (e.g. `test.run_id=abc123`) and receives aggregated per-operation stats for all traces in that run
   2. Each operation row shows total wall time, call count, mean/p50/p95/p99 latency (ms), and error count
   3. Results are ordered by total wall time descending — the most expensive operations appear first without manual sorting
   4. `JaegerClient.test_profile()` returns the same analysis programmatically
+
 **Plans**: TBD
 
 ### Phase 20: Flakiness Detection & Release v0.6.0
+
 **Goal**: QA engineers can distinguish flaky operations from systematic regressions in a service's recent traces, and v0.6.0 is published with complete documentation reflecting all four new QA tools
 **Depends on**: Phase 19
 **Requirements**: FLAK-01, FLAK-02, FLAK-03, FLAK-04, FLAK-05, REL-07, REL-08, REL-09
 **Success Criteria** (what must be TRUE):
+
   1. User calls `jaeger_flakiness_report` for a service and receives operations bucketed into three groups: flaky, regressed, and healthy
   2. The flaky bucket uses CV (coefficient of variation) — high variance, inconsistent errors across requests; the regressed bucket identifies shifted mean with consistent errors
   3. The lookback window defaults to 1 hour (consistent with `jaeger_detect_anomalies`) and is user-configurable
   4. `JaegerClient.flakiness_report()` returns the same analysis programmatically
   5. `pyproject.toml` shows version 0.6.0, CHANGELOG documents all four new QA tools, README shows 16 MCP tools with pytest/Allure integration examples
+
 **Plans**: TBD
 
 ## Progress Table
@@ -215,7 +246,7 @@ Plans:
 | 14. Anomaly Detection | v0.4.0 | ANOM-01..06 | Done | 2026-06-18 |
 | 15. Release v0.4.0 | v0.4.0 | REL-04..06 | Done | 2026-06-18 |
 | 16. Predictive Analytics | v0.5.0 | PRED-01..06 | Done | 2026-06-19 |
-| 17. Test Trace Correlation | v0.6.0 | TTC-01..04 | Not started | - |
+| 17. Test Trace Correlation | v0.6.0 | 2/2 | Complete   | 2026-07-08 |
 | 18. Regression Trace Diff | v0.6.0 | REG-01..05 | Not started | - |
 | 19. Test Performance Profiling | v0.6.0 | PROF-01..04 | Not started | - |
 | 20. Flakiness Detection & Release v0.6.0 | v0.6.0 | FLAK-01..05, REL-07..09 | Not started | - |
