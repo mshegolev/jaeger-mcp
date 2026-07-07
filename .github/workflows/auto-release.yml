@@ -84,6 +84,17 @@ jobs:
           sed -i "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"$NEW_VERSION\"/" pyproject.toml
           echo "Updated pyproject.toml to version $NEW_VERSION"
 
+      - name: Sync version across manifests
+        run: |
+          NEW_VERSION=${{ steps.bump_version.outputs.new_version }}
+          # Importable package version
+          sed -i "s/__version__ = \"[0-9]*\.[0-9]*\.[0-9]*\"/__version__ = \"$NEW_VERSION\"/" src/jaeger_mcp/__init__.py
+          # MCP server manifest: both the server version and the pypi package version
+          sed -i "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$NEW_VERSION\"/g" server.json
+          # OpenAPI tools doc info.version (openapi.yaml is the Jaeger API spec — left untouched)
+          sed -i "s/^  version: [0-9]*\.[0-9]*\.[0-9]*/  version: $NEW_VERSION/" docs/mcp-tools-openapi.yaml
+          echo "Synced __init__.py, server.json, docs/mcp-tools-openapi.yaml to $NEW_VERSION"
+
       - name: Update CHANGELOG.md
         run: |
           NEW_VERSION=${{ steps.bump_version.outputs.new_version }}
@@ -101,7 +112,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add pyproject.toml CHANGELOG.md
+          git add pyproject.toml CHANGELOG.md src/jaeger_mcp/__init__.py server.json docs/mcp-tools-openapi.yaml
           git commit -m "Bump version to v${{ steps.bump_version.outputs.new_version }}"
           git push
 
