@@ -48,3 +48,6 @@ debug_*.txt
 *.tar.gz
 *.whl
 .planning/
+
+# Serena (local tooling)
+.serena/
