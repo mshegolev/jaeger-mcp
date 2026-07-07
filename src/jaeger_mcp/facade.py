@@ -34,6 +34,8 @@ from jaeger_mcp.models import (
     AnomalyDetectionOutput,
     CriticalPathOutput,
     FindTestTracesOutput,
+    RegressionDiffOutput,
+    RegressionOp,
     TestTraceMatch,
     WindowComparisonOutput,
 )
@@ -1346,6 +1348,127 @@ class JaegerClient:
                 tags=tags,
                 service=service,
                 lookback_hours=lookback_hours,
+                limit=limit,
+            )
+        )
+
+    async def _aregression_diff(
+        self,
+        service: str,
+        baseline_start: int,
+        baseline_end: int,
+        comparison_start: int,
+        comparison_end: int,
+        *,
+        limit: int = 100,
+    ) -> RegressionDiffOutput:
+        """Async implementation of :meth:`regression_diff`."""
+        window = await self._acompare_windows(
+            service,
+            baseline_start,
+            baseline_end,
+            comparison_start,
+            comparison_end,
+            limit=limit,
+        )
+
+        ops: list[RegressionOp] = []
+        for diff in window["operations"]:
+            error_rate_delta: float = diff["error_rate_delta"]
+            change_type: str = diff["change_type"]
+
+            # Error-rate override applies before change_type check
+            if error_rate_delta > 0.05:
+                classification = "regressed"
+            elif change_type == "slower":
+                classification = "regressed"
+            elif change_type == "faster" and error_rate_delta <= 0:
+                classification = "recovered"
+            elif change_type == "added":
+                classification = "appeared"
+            elif change_type == "removed":
+                classification = "removed"
+            else:
+                # "unchanged" (and "faster" with positive error_rate_delta <= 0.05)
+                continue
+
+            if classification == "regressed":
+                severity_score = min(
+                    100,
+                    round(diff["p95_delta_pct"] * 50 + error_rate_delta * 200),
+                )
+            else:
+                severity_score = 0
+
+            ops.append(
+                RegressionOp(
+                    operation=diff["operation"],
+                    classification=classification,
+                    baseline_p95_ms=diff["baseline_p95_us"] // 1000,
+                    comparison_p95_ms=diff["comparison_p95_us"] // 1000,
+                    p95_delta_ms=diff["p95_delta_us"] // 1000,
+                    p95_delta_pct=diff["p95_delta_pct"],
+                    baseline_error_rate=diff["baseline_error_rate"],
+                    comparison_error_rate=diff["comparison_error_rate"],
+                    error_rate_delta=error_rate_delta,
+                    severity_score=severity_score,
+                )
+            )
+
+        ops.sort(key=lambda o: o["severity_score"], reverse=True)
+
+        return RegressionDiffOutput(
+            service=service,
+            baseline_start=window["baseline_start"],
+            baseline_end=window["baseline_end"],
+            comparison_start=window["comparison_start"],
+            comparison_end=window["comparison_end"],
+            operations=ops,
+            regressed_count=sum(1 for o in ops if o["classification"] == "regressed"),
+            recovered_count=sum(1 for o in ops if o["classification"] == "recovered"),
+            appeared_count=sum(1 for o in ops if o["classification"] == "appeared"),
+            removed_count=sum(1 for o in ops if o["classification"] == "removed"),
+        )
+
+    def regression_diff(
+        self,
+        service: str,
+        baseline_start: int,
+        baseline_end: int,
+        comparison_start: int,
+        comparison_end: int,
+        *,
+        limit: int = 100,
+    ) -> RegressionDiffOutput:
+        """Compare trace behavior and classify per-operation regressions.
+
+        Fetches traces from both time windows via :meth:`compare_windows` and applies
+        semantic classification (regressed / recovered / appeared / removed) with a
+        severity score (0–100) for triage prioritization.
+
+        Args:
+            service: Service name to analyse.
+            baseline_start: Baseline window start time (Unix timestamp in microseconds).
+            baseline_end: Baseline window end time (Unix timestamp in microseconds).
+            comparison_start: Comparison window start time (Unix timestamp in microseconds).
+            comparison_end: Comparison window end time (Unix timestamp in microseconds).
+            limit: Maximum traces to fetch per window (default 100, max 1000).
+
+        Returns:
+            RegressionDiffOutput with per-operation classifications sorted by
+            severity_score descending and summary counts.
+
+        Raises:
+            ValueError: If time ranges are invalid or limit is out of bounds.
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(
+            self._aregression_diff(
+                service,
+                baseline_start,
+                baseline_end,
+                comparison_start,
+                comparison_end,
                 limit=limit,
             )
         )

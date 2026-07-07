@@ -311,3 +311,36 @@ class FindTestTracesOutput(TypedDict):
     total_count: int
     tag_query: dict[str, str]
     service_filter: str | None
+
+
+# ── QA Regression Diff ───────────────────────────────────────────────────────
+
+
+class RegressionOp(TypedDict):
+    """Per-operation regression classification between two time windows."""
+
+    operation: str
+    classification: str  # "regressed" | "recovered" | "appeared" | "removed"
+    baseline_p95_ms: int
+    comparison_p95_ms: int
+    p95_delta_ms: int
+    p95_delta_pct: float
+    baseline_error_rate: float
+    comparison_error_rate: float
+    error_rate_delta: float
+    severity_score: int  # 0-100, higher = worse
+
+
+class RegressionDiffOutput(TypedDict):
+    """Aggregated regression diff result for jaeger_regression_diff."""
+
+    service: str
+    baseline_start: int
+    baseline_end: int
+    comparison_start: int
+    comparison_end: int
+    operations: list[RegressionOp]
+    regressed_count: int
+    recovered_count: int
+    appeared_count: int
+    removed_count: int
