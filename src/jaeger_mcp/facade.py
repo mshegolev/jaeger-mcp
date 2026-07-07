@@ -54,6 +54,8 @@ from jaeger_mcp.shaping import (
     span_tags_flat as _span_tags_flat,
 )
 
+_FIND_TEST_MAX_SERVICES = 20
+
 # ── Domain objects ────────────────────────────────────────────────────────
 
 
@@ -1263,14 +1265,12 @@ class JaegerClient:
         """Async implementation of :meth:`find_test_traces`."""
         import json
 
-        _MAX_SERVICES = 20
-
         if service is not None:
             services: list[str] = [service]
         else:
             svc_data = await self._http.aget("/services") or {}
             all_services: list[str] = svc_data.get("data") or []
-            services = all_services[:_MAX_SERVICES]
+            services = all_services[:_FIND_TEST_MAX_SERVICES]
 
         now_us = int(time.time() * 1_000_000)
         start_us = now_us - (lookback_hours * 3600 * 1_000_000)
@@ -1282,8 +1282,8 @@ class JaegerClient:
                 {
                     "service": svc,
                     "tags": tags_str,
-                    "start": start_us // 1000,
-                    "end": now_us // 1000,
+                    "start": start_us,
+                    "end": now_us,
                     "limit": limit,
                 },
             )
@@ -1323,11 +1323,12 @@ class JaegerClient:
             )
 
         matches.sort(key=lambda m: m["start_time"], reverse=True)
+        total = len(matches)
         matches = matches[:limit]
 
         return FindTestTracesOutput(
             traces=matches,
-            total_count=len(matches),
+            total_count=total,
             tag_query=tags,
             service_filter=service,
         )

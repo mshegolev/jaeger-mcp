@@ -153,7 +153,7 @@ async def test_find_test_traces_limit() -> None:
     )
     data = result.structuredContent
     assert len(data["traces"]) == 2
-    assert data["total_count"] == 2
+    assert data["total_count"] == 5  # pre-truncation count; 5 matched, 2 returned
 
 
 @respx.mock

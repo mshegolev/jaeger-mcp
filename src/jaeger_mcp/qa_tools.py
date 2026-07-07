@@ -86,8 +86,8 @@ async def jaeger_find_test_traces(
                 {
                     "service": svc,
                     "tags": tags_str,
-                    "start": start_us // 1000,
-                    "end": now_us // 1000,
+                    "start": start_us,
+                    "end": now_us,
                     "limit": limit,
                 },
             )
@@ -127,8 +127,8 @@ async def jaeger_find_test_traces(
             )
 
         matches.sort(key=lambda m: m["start_time"], reverse=True)
-        matches = matches[:limit]
         total = len(matches)
+        matches = matches[:limit]
 
         result_out: FindTestTracesOutput = {
             "traces": matches,
