@@ -6,12 +6,12 @@
     "url": "https://github.com/mshegolev/jaeger-mcp",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.5.3",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "jaeger-mcp",
-      "version": "0.1.1",
+      "version": "0.5.3",
       "transport": {
         "type": "stdio"
       },

@@ -22,7 +22,7 @@ info:
     10. `jaeger_detect_anomalies` - Statistical latency/error-rate spike detection
     
     All tools are read-only and carry `readOnlyHint: true` with zero risk of modifying trace data.
-  version: 0.4.0
+  version: 0.5.3
   contact:
     name: Mikhail Shchegolev
     email: mshegolev@gmail.com
