@@ -11,7 +11,7 @@ from pydantic import Field
 
 from jaeger_mcp import output
 from jaeger_mcp._mcp import get_client, mcp
-from jaeger_mcp.models import FindTestTracesOutput, TestTraceMatch
+from jaeger_mcp.models import FindTestTracesOutput, RegressionDiffOutput, TestTraceMatch
 from jaeger_mcp.shaping import shape_trace_summary
 
 _MAX_SERVICES = 20
@@ -148,4 +148,99 @@ async def jaeger_find_test_traces(
         return output.fail(exc, "jaeger_find_test_traces")
 
 
-__all__ = ["jaeger_find_test_traces"]
+@mcp.tool(
+    name="jaeger_regression_diff",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    },
+    structured_output=True,
+)
+async def jaeger_regression_diff(
+    service: Annotated[
+        str,
+        Field(
+            description="Jaeger service name to analyse for regressions.",
+            pattern=r"^[a-zA-Z0-9._:\-]+$",
+        ),
+    ],
+    baseline_start: Annotated[
+        int,
+        Field(
+            description="Baseline window start time (Unix microseconds).",
+            ge=0,
+        ),
+    ],
+    baseline_end: Annotated[
+        int,
+        Field(
+            description="Baseline window end time (Unix microseconds).",
+            ge=0,
+        ),
+    ],
+    comparison_start: Annotated[
+        int | None,
+        Field(
+            description="Comparison window start time (Unix microseconds). Defaults to now minus 15 minutes.",
+            ge=0,
+        ),
+    ] = None,
+    comparison_end: Annotated[
+        int | None,
+        Field(
+            description="Comparison window end time (Unix microseconds). Defaults to now.",
+            ge=0,
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(
+            description="Maximum traces to fetch per window.",
+            ge=10,
+            le=1000,
+        ),
+    ] = 100,
+) -> RegressionDiffOutput:
+    """Compare two Jaeger time windows and classify per-operation regressions.
+
+    Fetches traces from the baseline and comparison windows, then classifies
+    each operation as regressed, recovered, appeared, or removed. Results are
+    sorted by severity score (0-100) descending for easy triage.
+    """
+    try:
+        now_us = int(time.time() * 1_000_000)
+        if comparison_end is None:
+            comparison_end = now_us
+        if comparison_start is None:
+            comparison_start = now_us - (15 * 60 * 1_000_000)
+
+        from jaeger_mcp.facade import JaegerClient
+
+        http_client = await get_client()
+        facade = JaegerClient(http_client)
+        result = await facade._aregression_diff(
+            service,
+            baseline_start,
+            baseline_end,
+            comparison_start,
+            comparison_end,
+            limit=limit,
+        )
+
+        n = len(result["operations"])
+        r = result["regressed_count"]
+        rec = result["recovered_count"]
+        app = result["appeared_count"]
+        rem = result["removed_count"]
+        md = (
+            f"Found {n} operation(s) with changes for service '{service}': "
+            f"{r} regressed, {rec} recovered, {app} appeared, {rem} removed."
+        )
+        return output.ok(result, md)
+
+    except Exception as exc:
+        return output.fail(exc, "jaeger_regression_diff")
+
+
+__all__ = ["jaeger_find_test_traces", "jaeger_regression_diff"]
