@@ -130,6 +130,13 @@ EXPECTED_TOOLS: dict[str, dict[str, Any]] = {
         "required_params": {"service", "baseline_start", "baseline_end"},
         "optional_params": {"comparison_start", "comparison_end", "limit"},
     },
+    "jaeger_test_profile": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "required_params": {"tags"},
+        "optional_params": {"service", "lookback_hours", "limit"},
+    },
 }
 
 
