@@ -170,6 +170,8 @@ class OperationStats(TypedDict):
     p99_duration_us: int
     error_count: int
     error_rate: float
+    total_duration_us: int
+    mean_duration_us: int
 
 
 class SpanStatisticsOutput(TypedDict):
@@ -344,3 +346,29 @@ class RegressionDiffOutput(TypedDict):
     recovered_count: int
     appeared_count: int
     removed_count: int
+
+
+# ── QA Test Performance Profiling ────────────────────────────────────────────
+
+
+class ProfileOp(TypedDict):
+    """Per-operation performance row in a test-run profile."""
+
+    operation: str
+    total_wall_time_ms: int
+    call_count: int
+    mean_ms: int
+    p50_ms: int
+    p95_ms: int
+    p99_ms: int
+    error_count: int
+    error_rate: float
+
+
+class TestProfileOutput(TypedDict):
+    """Aggregated test-run profile result for jaeger_test_profile."""
+
+    tag_query: dict[str, str]
+    service_filter: str | None
+    trace_count: int
+    operations: list[ProfileOp]
