@@ -330,7 +330,12 @@ def aggregate_span_statistics(traces: list[dict[str, Any]]) -> list[OperationSta
 
     Returns:
         List of :class:`OperationStats`, one per distinct operation,
-        sorted alphabetically by operation name.
+        sorted alphabetically by operation name. Each dict carries
+        ``total_duration_us`` (sum of all span durations for the operation)
+        and ``mean_duration_us`` (``total_duration_us // count``); both are
+        additive fields used by profiling without affecting existing
+        ``jaeger_span_statistics`` output (callers build their result rows
+        by named key).
     """
     # Collect durations and error flags per operation
     ops: dict[str, dict[str, Any]] = {}
@@ -349,6 +354,7 @@ def aggregate_span_statistics(traces: list[dict[str, Any]]) -> list[OperationSta
         durations = sorted(data["durations"])
         count = len(durations)
         error_count = data["error_count"]
+        total = sum(durations)
         stats.append(
             {
                 "operation": op,
@@ -358,6 +364,8 @@ def aggregate_span_statistics(traces: list[dict[str, Any]]) -> list[OperationSta
                 "p99_duration_us": compute_percentile(durations, 99),
                 "error_count": error_count,
                 "error_rate": error_count / count if count else 0.0,
+                "total_duration_us": total,
+                "mean_duration_us": total // count if count else 0,
             }
         )
     return stats
