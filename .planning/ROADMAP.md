@@ -70,7 +70,7 @@
 ### v0.6.0: QA/Test Intelligence (Phases 17-20)
 
 - [x] **Phase 17: Test Trace Correlation** - Find Jaeger traces by Allure/pytest test tags via new MCP tool + facade (completed 2026-07-07)
-- [ ] **Phase 18: Regression Trace Diff** - Detect per-operation regressions across two time windows via new MCP tool + facade
+- [x] **Phase 18: Regression Trace Diff** - Detect per-operation regressions across two time windows via new MCP tool + facade (completed 2026-07-07)
 - [ ] **Phase 19: Test Performance Profiling** - Aggregate per-operation hotspots across a tagged test run via new MCP tool + facade
 - [ ] **Phase 20: Flakiness Detection & Release v0.6.0** - Distinguish flaky vs regressed operations + version bump, changelog, README
 
@@ -195,7 +195,10 @@ Plans:
   3. Each operation carries a numeric severity score (0–100) enabling triage by impact magnitude; default comparison window is the last 15 minutes
   4. `JaegerClient.regression_diff()` returns the same analysis programmatically
 
-**Plans**: TBD
+**Plans**: 2/2 plans complete
+
+- [x] phase-18-01-PLAN.md
+- [x] phase-18-02-PLAN.md
 
 ### Phase 19: Test Performance Profiling
 
@@ -209,7 +212,9 @@ Plans:
   3. Results are ordered by total wall time descending — the most expensive operations appear first without manual sorting
   4. `JaegerClient.test_profile()` returns the same analysis programmatically
 
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] phase-19-01-PLAN.md — extend aggregate_span_statistics + add ProfileOp/TestProfileOutput TypedDicts + register jaeger_test_profile MCP tool
+- [ ] phase-19-02-PLAN.md — add _atest_profile/test_profile facade methods + tests/test_test_profile.py + register in EXPECTED_TOOLS
 
 ### Phase 20: Flakiness Detection & Release v0.6.0
 
@@ -247,6 +252,6 @@ Plans:
 | 15. Release v0.4.0 | v0.4.0 | REL-04..06 | Done | 2026-06-18 |
 | 16. Predictive Analytics | v0.5.0 | PRED-01..06 | Done | 2026-06-19 |
 | 17. Test Trace Correlation | v0.6.0 | 2/2 | Complete   | 2026-07-08 |
-| 18. Regression Trace Diff | v0.6.0 | REG-01..05 | Not started | - |
+| 18. Regression Trace Diff | v0.6.0 | 2/2 | Complete   | 2026-07-07 |
 | 19. Test Performance Profiling | v0.6.0 | PROF-01..04 | Not started | - |
 | 20. Flakiness Detection & Release v0.6.0 | v0.6.0 | FLAK-01..05, REL-07..09 | Not started | - |
