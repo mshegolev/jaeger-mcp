@@ -11,7 +11,13 @@ from pydantic import Field
 
 from jaeger_mcp import output
 from jaeger_mcp._mcp import get_client, mcp
-from jaeger_mcp.models import FindTestTracesOutput, RegressionDiffOutput, TestTraceMatch
+from jaeger_mcp.models import (
+    FindTestTracesOutput,
+    ProfileOp,
+    RegressionDiffOutput,
+    TestProfileOutput,
+    TestTraceMatch,
+)
 from jaeger_mcp.shaping import shape_trace_summary
 
 _MAX_SERVICES = 20
@@ -243,4 +249,78 @@ async def jaeger_regression_diff(
         return output.fail(exc, "jaeger_regression_diff")
 
 
-__all__ = ["jaeger_find_test_traces", "jaeger_regression_diff"]
+@mcp.tool(
+    name="jaeger_test_profile",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    },
+    structured_output=True,
+)
+async def jaeger_test_profile(
+    tags: Annotated[
+        dict[str, str],
+        Field(
+            description=(
+                "Tag key-value pairs scoping the test run — e.g."
+                " {'test.run_id': 'abc123'} or {'allure.id': 'TC-42'}."
+            ),
+        ),
+    ],
+    service: Annotated[
+        str | None,
+        Field(
+            description=("Jaeger service name. If omitted, all services (up to 20) are searched concurrently."),
+        ),
+    ] = None,
+    lookback_hours: Annotated[
+        int,
+        Field(
+            description="Hours back from now to search.",
+            ge=1,
+            le=168,
+        ),
+    ] = 1,
+    limit: Annotated[
+        int,
+        Field(
+            description="Maximum traces to aggregate.",
+            ge=1,
+            le=500,
+        ),
+    ] = 50,
+) -> TestProfileOutput:
+    """Aggregate per-operation latency hotspots across all traces matching the supplied tag query.
+
+    Operations are ranked by total wall time descending so the most expensive
+    appear first.
+    """
+    try:
+        from jaeger_mcp.facade import JaegerClient
+
+        http_client = await get_client()
+        facade = JaegerClient(http_client)
+        result = await facade._atest_profile(
+            tags=tags,
+            service=service,
+            lookback_hours=lookback_hours,
+            limit=limit,
+        )
+
+        if result["trace_count"] == 0:
+            md = f"No traces found matching tags {tags}."
+        else:
+            top = result["operations"][0]
+            md = (
+                f"Profiled {result['trace_count']} trace(s); top operation"
+                f" '{top['operation']}' consumed {top['total_wall_time_ms']} ms"
+                " wall time."
+            )
+        return output.ok(result, md)
+
+    except Exception as exc:
+        return output.fail(exc, "jaeger_test_profile")
+
+
+__all__ = ["jaeger_find_test_traces", "jaeger_regression_diff", "jaeger_test_profile"]
