@@ -629,3 +629,48 @@ class TestAggregateSpanStatistics:
         stats = _aggregate_span_statistics(traces)
         assert stats[0]["p50_duration_us"] == 123456
         assert isinstance(stats[0]["p50_duration_us"], int)
+
+    def test_total_and_mean_duration_single_span(self) -> None:
+        traces = [
+            {
+                "traceID": "t",
+                "spans": [{"operationName": "GET /x", "duration": 5000, "tags": []}],
+                "processes": {},
+            }
+        ]
+        stats = _aggregate_span_statistics(traces)
+        assert stats[0]["total_duration_us"] == 5000, stats[0]
+        assert stats[0]["mean_duration_us"] == 5000, stats[0]
+
+    def test_total_and_mean_duration_multiple_spans(self) -> None:
+        traces = [
+            {
+                "traceID": "t",
+                "spans": [
+                    {"operationName": "GET /x", "duration": 3000, "tags": []},
+                    {"operationName": "GET /x", "duration": 7000, "tags": []},
+                ],
+                "processes": {},
+            }
+        ]
+        stats = _aggregate_span_statistics(traces)
+        assert stats[0]["total_duration_us"] == 10000, stats[0]
+        assert stats[0]["mean_duration_us"] == 5000, stats[0]
+
+    def test_existing_fields_still_present(self) -> None:
+        traces = [
+            {
+                "spans": [
+                    {"operationName": "op", "duration": 100, "tags": []},
+                    {"operationName": "op", "duration": 200, "tags": []},
+                ]
+            }
+        ]
+        stats = _aggregate_span_statistics(traces)
+        s = stats[0]
+        assert s["count"] == 2
+        assert s["p50_duration_us"] == 100
+        assert s["p95_duration_us"] == 200
+        assert s["p99_duration_us"] == 200
+        assert s["error_count"] == 0
+        assert s["error_rate"] == 0.0
