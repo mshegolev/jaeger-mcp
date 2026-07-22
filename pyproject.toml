@@ -63,6 +63,10 @@ include = [
     "CHANGELOG.md",
     "LICENSE",
 ]
+exclude = [
+    "**/*.bak",
+    "**/__pycache__",
+]
 
 [tool.ruff]
 line-length = 120
