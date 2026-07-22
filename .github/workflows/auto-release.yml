@@ -31,8 +31,14 @@ jobs:
           ruff format --check src tests
 
       - name: Run tests with coverage
+        # Unified coverage gate: 60% across ALL workflows (was 55 here vs 90 in
+        # test.yml — the 90 was aspirational; real total coverage is ~65%, held
+        # down by predictive/ (11-15%) and the legacy tools.py (50%). Raising the
+        # floor to 90 requires a dedicated test-backfill for those modules; until
+        # then 60 is the enforced, currently-passing floor. Keep this in sync
+        # with test.yml.
         run: |
-          pytest tests/ -v --cov=src/jaeger_mcp --cov-report=term-missing --cov-fail-under=55
+          pytest tests/ -v --cov=src/jaeger_mcp --cov-report=term-missing --cov-fail-under=60
 
   bump-version:
     needs: test
