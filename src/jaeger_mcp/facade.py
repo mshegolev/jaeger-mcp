@@ -34,8 +34,10 @@ from jaeger_mcp.models import (
     AnomalyDetectionOutput,
     CriticalPathOutput,
     FindTestTracesOutput,
+    ProfileOp,
     RegressionDiffOutput,
     RegressionOp,
+    TestProfileOutput,
     TestTraceMatch,
     WindowComparisonOutput,
 )
@@ -1472,6 +1474,116 @@ class JaegerClient:
                 baseline_end,
                 comparison_start,
                 comparison_end,
+                limit=limit,
+            )
+        )
+
+    async def _atest_profile(
+        self,
+        tags: dict[str, str],
+        service: str | None = None,
+        lookback_hours: int = 1,
+        limit: int = 50,
+    ) -> TestProfileOutput:
+        """Async implementation of :meth:`test_profile`."""
+        import json
+
+        if service is not None:
+            services: list[str] = [service]
+        else:
+            svc_data = await self._http.aget("/services") or {}
+            all_services: list[str] = svc_data.get("data") or []
+            services = all_services[:_FIND_TEST_MAX_SERVICES]
+
+        now_us = int(time.time() * 1_000_000)
+        start_us = now_us - (lookback_hours * 3600 * 1_000_000)
+        tags_str = json.dumps(tags)
+
+        endpoints: list[tuple[str, dict[str, Any] | None]] = [
+            (
+                "/traces",
+                {
+                    "service": svc,
+                    "tags": tags_str,
+                    "start": start_us,
+                    "end": now_us,
+                    "limit": limit,
+                },
+            )
+            for svc in services
+        ]
+
+        results = await self._http.aget_many(endpoints)
+
+        seen: set[str] = set()
+        raw_traces: list[dict[str, Any]] = []
+        for res in results:
+            for trace in (res or {}).get("data") or []:
+                tid: str = trace.get("traceID", "")
+                if tid and tid not in seen:
+                    seen.add(tid)
+                    raw_traces.append(trace)
+
+        raw_traces = raw_traces[:limit]
+
+        stats = _aggregate_span_statistics(raw_traces)
+
+        operations: list[ProfileOp] = [
+            ProfileOp(
+                operation=stat["operation"],
+                total_wall_time_ms=stat["total_duration_us"] // 1000,
+                call_count=stat["count"],
+                mean_ms=stat["mean_duration_us"] // 1000,
+                p50_ms=stat["p50_duration_us"] // 1000,
+                p95_ms=stat["p95_duration_us"] // 1000,
+                p99_ms=stat["p99_duration_us"] // 1000,
+                error_count=stat["error_count"],
+                error_rate=stat["error_rate"],
+            )
+            for stat in stats
+        ]
+        operations.sort(key=lambda op: op["total_wall_time_ms"], reverse=True)
+
+        return TestProfileOutput(
+            tag_query=tags,
+            service_filter=service,
+            trace_count=len(raw_traces),
+            operations=operations,
+        )
+
+    def test_profile(
+        self,
+        tags: dict[str, str],
+        service: str | None = None,
+        lookback_hours: int = 1,
+        limit: int = 50,
+    ) -> TestProfileOutput:
+        """Aggregate per-operation latency hotspots for a tagged test run.
+
+        Finds every trace matching ``tags`` (searching all services concurrently
+        when ``service`` is omitted), then aggregates span durations per operation
+        via :func:`aggregate_span_statistics`. Operations are ranked by total wall
+        time descending so the most expensive appear first.
+
+        Args:
+            tags: Tag key-value pairs scoping the test run (any framework schema).
+            service: Jaeger service name; if ``None`` all services (up to 20) are
+                searched concurrently.
+            lookback_hours: Hours back from now to search (1-168).
+            limit: Maximum traces to aggregate (1-500).
+
+        Returns:
+            TestProfileOutput with per-operation profile rows sorted by
+            ``total_wall_time_ms`` descending.
+
+        Raises:
+            httpx.HTTPStatusError: On HTTP-level failures.
+        """
+        return asyncio.run(
+            self._atest_profile(
+                tags=tags,
+                service=service,
+                lookback_hours=lookback_hours,
                 limit=limit,
             )
         )
