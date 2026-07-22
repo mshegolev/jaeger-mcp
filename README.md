@@ -15,7 +15,7 @@ Give Claude (or any MCP-capable agent) read access to your trace data — search
 The existing Jaeger integrations require a running UI or custom scripts. This server:
 
 - Speaks the standard [Model Context Protocol](https://modelcontextprotocol.io/) over **stdio** — works with Claude Desktop, Claude Code, Cursor, and any MCP client.
-- Is **read-only**: all 12 tools carry `readOnlyHint: true` — zero risk of modifying trace data.
+- Is **read-only**: all 15 tools carry `readOnlyHint: true` — zero risk of modifying trace data.
 - Returns **dual-channel output**: structured JSON (`structuredContent`) for programmatic use + Markdown (`content`) for human-readable display.
 - Has **actionable error messages** that name the exact env var to fix and suggest a next step.
 - Supports **Bearer token**, **HTTP Basic auth**, or **no auth** (common for internal deployments).
@@ -37,6 +37,9 @@ The existing Jaeger integrations require a running UI or custom scripts. This se
 | `jaeger_detect_anomalies` | `GET /api/traces` ×2 | Statistical latency/error-rate spike detection per operation |
 | `jaeger_predict_degradation` | `GET /api/traces` | Predict performance degradation 2-24 hours in advance |
 | `jaeger_forecast_capacity` | `GET /api/traces` | Forecast throughput demands and resource requirements |
+| `jaeger_find_test_traces` | `GET /api/traces` | Correlate a test run to its traces by tag query (Allure/pytest/custom) |
+| `jaeger_regression_diff` | `GET /api/traces` ×2 | Classify per-operation regressions between two time windows |
+| `jaeger_test_profile` | `GET /api/traces` | Per-operation latency hotspots for a tagged test run |
 
 ## Installation
 
@@ -226,7 +229,7 @@ for span in trace.spans:
         print(f"  tags: {span.tags}")
 ```
 
-Available methods: `get_trace()`, `search_traces()`, `list_services()`, `get_dependencies()`, `compare_traces()`, `span_statistics()`, `critical_path()`, `compare_windows()`, `detect_anomalies()`.
+Available methods: `get_trace()`, `search_traces()`, `list_services()`, `get_dependencies()`, `compare_traces()`, `span_statistics()`, `critical_path()`, `compare_windows()`, `detect_anomalies()`, `predict_degradation()`, `forecast_capacity()`, `find_test_traces()`, `regression_diff()`, `test_profile()`.
 
 Domain objects: `Span`, `Trace`, `TraceSummary`, `ServiceDep`, `TraceComparison`, `SpanIdentity`, `SpanChange`, `SpanStatisticsResult`, `OperationStatResult`, `CriticalPathOutput`, `CriticalPathSpan`, `BottleneckSpan`, `WindowComparisonOutput`, `OperationDiff`, `AnomalyDetectionOutput`, `OperationAnomaly` — all with typed fields.
 
