@@ -7,6 +7,8 @@ validation, :class:`JaegerHTTPClient` construction (which raises
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from jaeger_mcp.client import JaegerHTTPClient, _parse_bool, _validate_url
@@ -140,3 +142,116 @@ class TestJaegerHTTPClientInit:
         monkeypatch.setenv("JAEGER_URL", "https://jaeger.example.com")
         client = JaegerHTTPClient()
         assert client._headers["User-Agent"] == "jaeger-mcp"
+
+
+class TestClientNotReusedAcrossEventLoops:
+    """A cached httpx.AsyncClient must not outlive the loop that created it.
+
+    Found in production, not in review. The investigator walks 6 candidate services for an
+    order-id trace search through `asyncio.to_thread -> sync get() -> asyncio.run`, and every
+    other candidate failed:
+
+        answered cleanly: EnP.ECHRG.Payments, consumer-kafka-go, EnP.ECHRG.OrderPaymentManagement
+        FAILED: EnP.ECHRG.Subscriptions / EnP.ECHRG.History / EnP.EORD.OrderServiceGo
+                RuntimeError: Event loop is closed
+
+    The decisive measurement was re-running a FAILING candidate alone: it succeeded. So the fault
+    was never the service name — it was this shared instance. `get()` runs each call under its own
+    asyncio.run(), which closes that loop on return; the cached client's pool holds loop-bound
+    resources, so the next call raises. The alternation comes from the failure itself clearing the
+    client, letting the call after it rebuild and succeed.
+
+    Consequence for the caller: `exhausted` never became True, so "no traces for this order" could
+    never be stated honestly — a wrong-negative machine.
+    """
+
+    def _client(self) -> JaegerHTTPClient:
+        return JaegerHTTPClient(url="https://jaeger.example.com", ssl_verify=False)
+
+    def test_a_new_loop_gets_a_new_client(self) -> None:
+        client = self._client()
+        seen: list[object] = []
+
+        async def probe() -> None:
+            seen.append(await client._ensure_client())
+
+        asyncio.run(probe())  # loop A, closed on return
+        asyncio.run(probe())  # loop B
+
+        assert seen[0] is not seen[1], (
+            "the client created under the first (now closed) loop was reused under the second; "
+            "its pool is loop-bound, which is what raises RuntimeError: Event loop is closed"
+        )
+
+    def test_the_same_loop_still_reuses_one_client(self) -> None:
+        """The fix must not throw away pooling inside a single loop."""
+        client = self._client()
+
+        async def probe() -> bool:
+            return (await client._ensure_client()) is (await client._ensure_client())
+
+        assert asyncio.run(probe()) is True
+
+    def test_loop_marker_is_cleared_on_aclose(self) -> None:
+        """Otherwise a rebuilt client could be matched against a stale loop identity."""
+        client = self._client()
+
+        async def build_then_close() -> None:
+            await client._ensure_client()
+            assert client._client_loop is not None
+            await client.aclose()
+
+        asyncio.run(build_then_close())
+        assert client._client is None
+        assert client._client_loop is None
+
+    def test_six_sequential_sync_calls_all_answer(self) -> None:
+        """The shape of the prod failure: 6 candidates, each in its own thread and loop.
+
+        Uses a real keep-alive HTTP server rather than a mocked transport: the bug lives in the
+        connection pool, and a mocked transport has none.
+
+        HONEST LIMIT: this test passes with AND without the fix. Over plain HTTP the pool keeps
+        nothing the closed loop owned, so it does not discriminate — the discriminating test is
+        test_a_new_loop_gets_a_new_client above (verified: it fails when the fix is reverted).
+        Reproducing the prod failure itself needs TLS, which prod has and this does not. It is kept
+        as a shape guard: if the sync-get path ever breaks outright, this catches it.
+        """
+        import json as _json
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"  # keep-alive, as prod's Jaeger does
+
+            def do_GET(self) -> None:  # noqa: N802
+                body = _json.dumps({"data": ["svc"]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            client = JaegerHTTPClient(
+                url=f"http://127.0.0.1:{server.server_address[1]}", ssl_verify=False
+            )
+
+            async def walk() -> list[str]:
+                outcomes = []
+                for _ in range(6):
+                    try:
+                        await asyncio.to_thread(client.get, "/services")
+                        outcomes.append("ok")
+                    except Exception as exc:  # noqa: BLE001 - the outcome IS the assertion
+                        outcomes.append(f"{type(exc).__name__}: {exc}")
+                return outcomes
+
+            assert asyncio.run(walk()) == ["ok"] * 6
+        finally:
+            server.shutdown()
