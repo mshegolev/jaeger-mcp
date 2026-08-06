@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v0.6.0
 milestone_name: QA/Test Intelligence
-current_phase: 18
-current_phase_name: Regression Trace Diff
-status: in_progress
-stopped_at: ""
-last_updated: "2026-07-08T00:00:00.000Z"
-last_activity: 2026-07-08
-last_activity_desc: Phase 17 complete — jaeger_find_test_traces + facade + 6 tests (266 passing)
+current_phase: 19
+current_phase_name: Test Performance Profiling
+status: executing
+stopped_at: phase-17-01 complete — all 3 tasks done, 3 commits
+last_updated: "2026-07-09T09:27:03.527Z"
+last_activity: 2026-07-09
+last_activity_desc: Phase 19 execution started
 progress:
-  total_phases: 4
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
-  percent: 25
+  total_phases: 10
+  completed_phases: 2
+  total_plans: 8
+  completed_plans: 6
+  percent: 20
 ---
 
 # jaeger-mcp — Project State
@@ -32,10 +32,10 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 
 ## Current Position
 
-Phase: Phase 17 — Test Trace Correlation
-Plan: 2 of 2 complete
-Status: In progress — plan 01 done, plan 02 (tests + facade) next
-Last activity: 2026-07-08 — Phase 17 Plan 01 complete (TestTraceMatch TypedDicts + jaeger_find_test_traces)
+Phase: 19 (Test Performance Profiling) — EXECUTING
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-07-09 — Phase 19 execution started
 
 ## Performance Metrics
 
@@ -53,6 +53,8 @@ Last activity: 2026-07-08 — Phase 17 Plan 01 complete (TestTraceMatch TypedDic
 
 ---
 | Phase phase-17 P02 | 370 | 3 tasks | 3 files |
+| Phase phase-18 Pphase-18-02 | 1601 | 3 tasks | 3 files |
+| Phase phase-19 P01 | 394 | 3 tasks | 5 files |
 
 ## v0.6.0 Phase Plan
 
@@ -103,8 +105,13 @@ All previous milestones have been successfully completed and archived.
 
 ## Session Continuity
 
-**Last session:** 2026-07-07T21:21:15.055Z
+**Last session:** 2026-07-09T09:26:54.267Z
 **Stopped at:** phase-17-01 complete — all 3 tasks done, 3 commits
 
 **Last updated**: 2026-07-08
 **Next action**: Execute phase-17-02 — tests (test_qa_tools.py, test_protocol.py update) + facade.py find_test_traces()
+
+## Decisions
+
+- [Phase ?]: Avoids code duplication by reusing existing Phase 18-01 facade method
+- [Phase ?]: Phase 19 plan 01: total/mean_duration_us added only to OperationStats raw dict (NOT OperationStatResult/SpanStatisticsOutput) — facade builds result rows by named key
