@@ -13,7 +13,6 @@ from jaeger_mcp import output
 from jaeger_mcp._mcp import get_client, mcp
 from jaeger_mcp.models import (
     FindTestTracesOutput,
-    ProfileOp,
     RegressionDiffOutput,
     TestProfileOutput,
     TestTraceMatch,
@@ -263,8 +262,7 @@ async def jaeger_test_profile(
         dict[str, str],
         Field(
             description=(
-                "Tag key-value pairs scoping the test run — e.g."
-                " {'test.run_id': 'abc123'} or {'allure.id': 'TC-42'}."
+                "Tag key-value pairs scoping the test run — e.g. {'test.run_id': 'abc123'} or {'allure.id': 'TC-42'}."
             ),
         ),
     ],

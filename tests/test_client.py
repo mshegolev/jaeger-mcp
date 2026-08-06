@@ -238,9 +238,7 @@ class TestClientNotReusedAcrossEventLoops:
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
-            client = JaegerHTTPClient(
-                url=f"http://127.0.0.1:{server.server_address[1]}", ssl_verify=False
-            )
+            client = JaegerHTTPClient(url=f"http://127.0.0.1:{server.server_address[1]}", ssl_verify=False)
 
             async def walk() -> list[str]:
                 outcomes = []
