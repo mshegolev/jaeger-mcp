@@ -1,3 +1,35 @@
+## [0.6.0] — 2026-08-07
+
+### Added
+
+- `jaeger_find_test_traces` — traces by an arbitrary tag query (Allure/pytest/custom),
+  across all services when none is given. Plus `JaegerClient.find_test_traces()`.
+- `jaeger_regression_diff` — per-operation regressed/recovered/appeared/removed
+  classification between two time windows, sorted by a 0-100 severity score.
+  Plus `JaegerClient.regression_diff()`.
+- `jaeger_test_profile` — wall-time profile of a test run's operations.
+  Plus `JaegerClient.test_profile()`.
+- `aggregate_span_statistics()` now also returns `total_duration_us` and
+  `mean_duration_us` (additive — existing keys unchanged).
+- Public TypedDicts: `TestTraceMatch`, `FindTestTracesOutput`, `RegressionOp`,
+  `RegressionDiffOutput`, `ProfileOp`, `TestProfileOutput`.
+
+Tool count: 12 → 15.
+
+### Fixed
+
+- `JaegerHTTPClient` no longer reuses a cached `httpx.AsyncClient` across event
+  loops. The sync `get()` wrapper runs each call under its own `asyncio.run()`,
+  which closes that loop on return; the pooled connections are loop-bound, so
+  the next call raised `RuntimeError: Event loop is closed`. Seen in production
+  as every other candidate service failing a trace search — which made
+  "no traces for this order" impossible to state honestly.
+
+### Removed
+
+- `src/jaeger_mcp/tools.py.bak` — a stale copy of `tools.py` that was shipped in
+  the sdist. `*.bak` is now excluded from packaging.
+
 ## [0.5.3] — 2026-07-07
 
 ### Added

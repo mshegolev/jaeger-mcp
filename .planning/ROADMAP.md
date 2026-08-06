@@ -212,12 +212,19 @@ Plans:
   3. Results are ordered by total wall time descending — the most expensive operations appear first without manual sorting
   4. `JaegerClient.test_profile()` returns the same analysis programmatically
 
-**Plans**: 1/2 plans executed
+**Plans**: 2/2 plans executed
 
 - [x] phase-19-01-PLAN.md — extend aggregate_span_statistics + add ProfileOp/TestProfileOutput TypedDicts + register jaeger_test_profile MCP tool
-- [ ] phase-19-02-PLAN.md — add _atest_profile/test_profile facade methods + tests/test_test_profile.py + register in EXPECTED_TOOLS
+- [x] phase-19-02-PLAN.md — add _atest_profile/test_profile facade methods + tests/test_test_profile.py + register in EXPECTED_TOOLS
 
-### Phase 20: Flakiness Detection & Release v0.6.0
+### Phase 20: Flakiness Detection & Release v0.7.0
+
+> **Release note (2026-08-07):** v0.6.0 was cut at the end of Phase 19, not Phase 20.
+> The umbrella (`investigate-suite`) needed a pinnable tag containing phases 17-19
+> plus the event-loop fix from `origin/main`; holding the tag until flakiness
+> detection landed would have kept the umbrella pinned to a tag (`v4`) that does not
+> exist on the remote at all. Flakiness detection therefore ships as v0.7.0, and
+> success criterion 5 below now reads "version 0.7.0 / 16 MCP tools".
 
 **Goal**: QA engineers can distinguish flaky operations from systematic regressions in a service's recent traces, and v0.6.0 is published with complete documentation reflecting all four new QA tools
 **Depends on**: Phase 19
@@ -254,5 +261,6 @@ Plans:
 | 16. Predictive Analytics | v0.5.0 | PRED-01..06 | Done | 2026-06-19 |
 | 17. Test Trace Correlation | v0.6.0 | 2/2 | Complete   | 2026-07-08 |
 | 18. Regression Trace Diff | v0.6.0 | 2/2 | Complete   | 2026-07-07 |
-| 19. Test Performance Profiling | v0.6.0 | 1/2 | In Progress|  |
-| 20. Flakiness Detection & Release v0.6.0 | v0.6.0 | FLAK-01..05, REL-07..09 | Not started | - |
+| 19. Test Performance Profiling | v0.6.0 | 2/2 | Complete | 2026-07-22 |
+| — Release v0.6.0 | v0.6.0 | — | Done | 2026-08-07 |
+| 20. Flakiness Detection & Release v0.7.0 | v0.7.0 | FLAK-01..05, REL-07..09 | Not started | - |
