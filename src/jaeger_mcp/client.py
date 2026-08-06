@@ -157,8 +157,21 @@ class JaegerHTTPClient:
         else:
             self._auth = None
 
-        # Lazy-init httpx.AsyncClient
+        # Lazy-init httpx.AsyncClient, plus the loop it belongs to.
+        #
+        # The loop matters because the SYNC `get()` wrapper runs each call under its own
+        # asyncio.run(), which CLOSES that loop when it returns. An httpx.AsyncClient keeps
+        # loop-bound resources in its connection pool, so reusing this instance under the next
+        # asyncio.run() raises `RuntimeError: Event loop is closed`.
+        #
+        # Measured in prod (investigator walking 6 candidate services through
+        # asyncio.to_thread -> get() -> asyncio.run): candidates 1, 3 and 5 answered while 2, 4
+        # and 6 failed with exactly that error, and the failing service SUCCEEDED when queried
+        # alone — so the fault was never the service, it was this shared instance. The
+        # alternation comes from the failure itself clearing the client, which lets the call
+        # after it rebuild and succeed.
         self._client: httpx.AsyncClient | None = None
+        self._client_loop: asyncio.AbstractEventLoop | None = None
 
         if not self.ssl_verify:
             logger.warning("ssl_verify=false url=%s — TLS certificate verification disabled", self.url)
@@ -167,7 +180,21 @@ class JaegerHTTPClient:
         self._concurrency_limit = int(os.environ.get("JAEGER_CONCURRENCY_LIMIT", "10"))
 
     async def _ensure_client(self) -> httpx.AsyncClient:
-        """Lazily create the httpx.AsyncClient on first use."""
+        """Lazily create the httpx.AsyncClient on first use, per event loop.
+
+        A cached client is reused ONLY within the loop that created it. When the running loop
+        differs, the cached instance is dropped and a fresh one built: its pool belongs to a loop
+        that has since been closed by asyncio.run(), and touching it raises
+        `RuntimeError: Event loop is closed`.
+
+        The stale client is NOT awaited-closed — `aclose()` would itself need the dead loop.
+        Dropping the reference is the only correct move; the sockets it held died with the loop.
+        """
+        loop = asyncio.get_running_loop()
+        if self._client is not None and self._client_loop is not loop:
+            logger.debug("event loop changed — rebuilding the httpx client (pool was loop-bound)")
+            self._client = None
+            self._client_loop = None
         if self._client is None:
             self._client = httpx.AsyncClient(
                 headers=self._headers,
@@ -177,6 +204,7 @@ class JaegerHTTPClient:
                 follow_redirects=True,
                 trust_env=False,
             )
+            self._client_loop = loop
         return self._client
 
     async def _request(
@@ -315,6 +343,7 @@ class JaegerHTTPClient:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+            self._client_loop = None
         self.token = ""
         self.username = ""
         self.password = ""
