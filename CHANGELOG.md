@@ -1,3 +1,14 @@
+## [0.6.1] — 2026-08-07
+
+### Fixed
+
+- Constrain `mcp` to `>=1.2,<2`. `mcp` 2.0 dropped `mcp.server.fastmcp`, which this
+  package imports in `_mcp.py`, `output.py` and (indirectly) everything downstream.
+  A clean `pip install jaeger-mcp` resolved `mcp==2.0.0` and the package failed at
+  import: `ModuleNotFoundError: No module named 'mcp.server.fastmcp'` — both the
+  `jaeger-mcp` console script and test collection died, so from an MCP client this
+  looked like an opaque transport error. `uv.lock` pinned 1.27.2 and hid this locally.
+
 ## [0.6.0] — 2026-08-07
 
 ### Added
