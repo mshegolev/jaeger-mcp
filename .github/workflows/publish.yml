@@ -1,12 +1,16 @@
 name: Publish to PyPI
 
-# Fires when a tag like v0.1.0, v1.0.0rc1 is pushed.
+# Fires when a tag like v0.1.0, v1.0.0rc1 is pushed, or when dispatched
+# against a tag ref (auto-release.yml does this: tags pushed with GITHUB_TOKEN
+# do not trigger other workflows, so it calls `gh workflow run --ref <tag>`).
+# The pattern requires vMAJOR.MINOR.PATCH so stray tags like `v4` never match.
 # Builds the sdist+wheel once, then publishes to PyPI using a
 # Trusted Publisher (OIDC — no API token stored anywhere).
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
 
 permissions:
   contents: read
