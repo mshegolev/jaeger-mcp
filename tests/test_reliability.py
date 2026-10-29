@@ -66,6 +66,8 @@ class TestRetry:
         route = respx.get("https://jaeger.example.com/api/services").mock(
             return_value=httpx.Response(404, json={"errors": ["not found"]})
         )
+        # The v3 fallback is also tried on 404 (Jaeger v2.22+); here it 404s too.
+        respx.get("https://jaeger.example.com/api/v3/services").mock(return_value=httpx.Response(404))
         client = JaegerHTTPClient(cache_ttl=0)
         try:
             with pytest.raises(httpx.HTTPStatusError) as exc_info:

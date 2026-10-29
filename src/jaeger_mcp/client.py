@@ -33,6 +33,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from jaeger_mcp import v3_compat
 from jaeger_mcp.errors import ConfigError
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,18 @@ def _parse_bool(value: str | bool | None, *, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() not in ("false", "0", "no", "off")
+
+
+def _env_number(name: str, default: str, cast: type) -> Any:
+    """Read a numeric env var, raising :class:`ConfigError` (not a bare ValueError) when malformed."""
+    raw = os.environ.get(name, default)
+    try:
+        value = cast(raw)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{name} must be a number (got: {raw!r})") from None
+    if value < 0:
+        raise ConfigError(f"{name} must not be negative (got: {raw!r})")
+    return value
 
 
 def _validate_url(url: str) -> str:
@@ -121,13 +134,13 @@ class JaegerHTTPClient:
         if timeout is not None:
             self.timeout = timeout
         else:
-            self.timeout = float(os.environ.get("JAEGER_TIMEOUT", "30"))
+            self.timeout = _env_number("JAEGER_TIMEOUT", "30", float)
 
         # JGR-03: Retry with exponential backoff. Default 3 attempts.
         if retry_attempts is not None:
             retries = retry_attempts
         else:
-            retries = int(os.environ.get("JAEGER_RETRY_ATTEMPTS", "3"))
+            retries = _env_number("JAEGER_RETRY_ATTEMPTS", "3", int)
 
         self._retry_total = retries
         self._retry_backoff = 1  # 1s, 2s, 4s …
@@ -137,7 +150,7 @@ class JaegerHTTPClient:
         if cache_ttl is not None:
             self.cache_ttl = cache_ttl
         else:
-            self.cache_ttl = float(os.environ.get("JAEGER_CACHE_TTL", "120"))
+            self.cache_ttl = _env_number("JAEGER_CACHE_TTL", "120", float)
         self._cache: dict[str, tuple[float, Any]] = {}
         self._cache_lock = asyncio.Lock()
 
@@ -170,6 +183,10 @@ class JaegerHTTPClient:
         # alone — so the fault was never the service, it was this shared instance. The
         # alternation comes from the failure itself clearing the client, which lets the call
         # after it rebuild and succeed.
+        # Set once a v1 discovery/search endpoint 404s but its /api/v3 equivalent answers
+        # (Jaeger v2.22+ dropped the v1 query endpoints): later calls go straight to v3.
+        self._prefer_v3 = False
+
         self._client: httpx.AsyncClient | None = None
         self._client_loop: asyncio.AbstractEventLoop | None = None
 
@@ -177,7 +194,7 @@ class JaegerHTTPClient:
             logger.warning("ssl_verify=false url=%s — TLS certificate verification disabled", self.url)
 
         # ASYNC-02: Concurrency limit for aget_many (default 10)
-        self._concurrency_limit = int(os.environ.get("JAEGER_CONCURRENCY_LIMIT", "10"))
+        self._concurrency_limit = max(_env_number("JAEGER_CONCURRENCY_LIMIT", "10", int), 1)
 
     async def _ensure_client(self) -> httpx.AsyncClient:
         """Lazily create the httpx.AsyncClient on first use, per event loop.
@@ -311,16 +328,54 @@ class JaegerHTTPClient:
             if cached is not None:
                 return cached
 
-        response = await self._request_with_retry("GET", endpoint, params=params)
-        if not response.content:
+        result = await self._fetch_json(endpoint, params)
+        if result is None:
             return None
-        result = response.json()
 
         # Store in cache if this was a discovery endpoint.
         if cache_key is not None:
             await self._cache_set(cache_key, result)
 
         return result
+
+    async def _fetch_json(self, endpoint: str, params: dict[str, Any] | None) -> Any:
+        """GET via the v1 API, falling back to ``/api/v3`` when the server no longer serves v1."""
+        is_by_id = endpoint.startswith("/traces/")
+        if self._prefer_v3 and not is_by_id and v3_compat.is_fallback_endpoint(endpoint):
+            return await self._v3_fallback(endpoint, params, None)
+        try:
+            response = await self._request_with_retry("GET", endpoint, params=params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404 and v3_compat.is_fallback_endpoint(endpoint):
+                return await self._v3_fallback(endpoint, params, exc)
+            raise
+        if not response.content:
+            return None
+        return response.json()
+
+    async def _v3_fallback(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None,
+        original: httpx.HTTPStatusError | None,
+    ) -> Any:
+        """Serve a v1 request from the v3 API; re-raise ``original`` if v3 cannot help."""
+        translated = v3_compat.translate_request(endpoint, params)
+        if translated is None:
+            if original is not None:
+                raise original
+            raise RuntimeError(f"no v3 equivalent for {endpoint}")
+        v3_endpoint, v3_params = translated
+        try:
+            response = await self._request_with_retry("GET", v3_endpoint, params=v3_params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404 and endpoint == "/traces" and "No traces found" in exc.response.text:
+                self._prefer_v3 = True
+                return {"data": [], "total": 0, "limit": 0, "offset": 0, "errors": None}
+            raise (original or exc) from None
+        if not endpoint.startswith("/traces/"):
+            self._prefer_v3 = True
+        return v3_compat.translate_response(endpoint, response.text)
 
     def get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
         """Sync GET wrapper — delegates to :meth:`aget`.
@@ -423,6 +478,8 @@ class JaegerHTTPClient:
             try:
                 return await self._stream_once(endpoint, params=params)
             except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404 and v3_compat.is_fallback_endpoint(endpoint):
+                    return await self._v3_fallback(endpoint, params, exc)
                 if exc.response.status_code not in self._retry_status_codes:
                     raise
                 last_exc = exc

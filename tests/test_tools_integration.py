@@ -143,6 +143,7 @@ async def test_list_operations_404_raises_tool_error() -> None:
     respx.get(f"{BASE}/api/services/nonexistent/operations").mock(
         return_value=httpx.Response(404, json={"errors": ["Service not found"]}),
     )
+    respx.get(f"{BASE}/api/v3/operations").mock(return_value=httpx.Response(404, json={"error": {}}))
     with pytest.raises(ToolError, match="404"):
         await jaeger_list_operations(service="nonexistent")
 
@@ -385,6 +386,9 @@ async def test_get_trace_empty_data_raises_tool_error() -> None:
 async def test_get_trace_404_raises_tool_error() -> None:
     respx.get(f"{BASE}/api/traces/notfound0000000000000000000000000").mock(
         return_value=httpx.Response(404, json={}),
+    )
+    respx.get(f"{BASE}/api/v3/traces/notfound0000000000000000000000000").mock(
+        return_value=httpx.Response(404, json={"error": {}}),
     )
     with pytest.raises(ToolError, match="404"):
         await jaeger_get_trace(trace_id="notfound0000000000000000000000000")
