@@ -4,6 +4,12 @@
 
 - Automated version bump
 
+### Notes
+
+- 0.6.4 reached PyPI via a manual tag re-push. From the next release on,
+  `auto-release.yml` dispatches `publish.yml` itself after tagging, so no manual
+  step is needed (the dispatch is the thing verified by the next release).
+
 ## [0.6.3] — 2026-08-12
 
 ### Added
