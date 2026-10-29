@@ -151,8 +151,8 @@ class TestClientNotReusedAcrossEventLoops:
     order-id trace search through `asyncio.to_thread -> sync get() -> asyncio.run`, and every
     other candidate failed:
 
-        answered cleanly: EnP.ECHRG.Payments, consumer-kafka-go, EnP.ECHRG.OrderPaymentManagement
-        FAILED: EnP.ECHRG.Subscriptions / EnP.ECHRG.History / EnP.EORD.OrderServiceGo
+        answered cleanly: acme.checkout, consumer-kafka-go, acme.payments
+        FAILED: acme.billing / acme.history / acme.orders
                 RuntimeError: Event loop is closed
 
     The decisive measurement was re-running a FAILING candidate alone: it succeeded. So the fault
