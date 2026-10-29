@@ -1,6 +1,6 @@
 """jaeger-mcp — MCP server for Jaeger distributed tracing."""
 
-__version__ = "0.6.4"
+__version__ = "0.6.5"
 
 from jaeger_mcp.facade import (
     JaegerClient,
