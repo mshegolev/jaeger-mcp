@@ -1,3 +1,9 @@
+## [0.6.4] — 2026-10-29
+
+### Added
+
+- Automated version bump
+
 ## [0.6.3] — 2026-08-12
 
 ### Added
