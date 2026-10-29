@@ -10,13 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -50,13 +50,13 @@ jobs:
       actions: write
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -106,14 +106,21 @@ jobs:
         run: |
           NEW_VERSION=${{ steps.bump_version.outputs.new_version }}
           DATE=$(date +%Y-%m-%d)
-          echo "## [${NEW_VERSION}] — ${DATE}" > temp_changelog.md
-          echo "" >> temp_changelog.md
-          echo "### Added" >> temp_changelog.md
-          echo "" >> temp_changelog.md
-          echo "- Automated version bump" >> temp_changelog.md
-          echo "" >> temp_changelog.md
-          cat CHANGELOG.md >> temp_changelog.md
-          mv temp_changelog.md CHANGELOG.md
+          if grep -q '^## \[Unreleased\]' CHANGELOG.md; then
+            # Hand-written release notes were staged under [Unreleased]: stamp them with the version.
+            sed -i "0,/^## \[Unreleased\]/s//## [${NEW_VERSION}] — ${DATE}/" CHANGELOG.md
+          else
+            {
+              echo "## [${NEW_VERSION}] — ${DATE}"
+              echo ""
+              echo "### Added"
+              echo ""
+              echo "- Automated version bump"
+              echo ""
+              cat CHANGELOG.md
+            } > temp_changelog.md
+            mv temp_changelog.md CHANGELOG.md
+          fi
 
       - name: Commit and push version bump
         run: |
@@ -146,17 +153,9 @@ jobs:
           gh workflow run publish.yml --ref "v${{ steps.bump_version.outputs.new_version }}"
 
       - name: Create GitHub Release
-        uses: actions/create-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ steps.bump_version.outputs.new_version }}
-          release_name: Release v${{ steps.bump_version.outputs.new_version }}
-          body: |
-            Automated release for version ${{ steps.bump_version.outputs.new_version }}
-            
-            Changes:
-            - Version bump from ${{ steps.current_version.outputs.version }} to ${{ steps.bump_version.outputs.new_version }}
-            - Merged latest changes from main to master
-          draft: false
-          prerelease: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.bump_version.outputs.new_version }}" \
+            --title "Release v${{ steps.bump_version.outputs.new_version }}" \
+            --notes "Automated release for version ${{ steps.bump_version.outputs.new_version }} (previous: ${{ steps.current_version.outputs.version }}). See CHANGELOG.md for details."

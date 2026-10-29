@@ -1,3 +1,27 @@
+## [Unreleased]
+
+### Fixed
+
+- `jaeger_compare_windows`, `jaeger_detect_anomalies`, `jaeger_regression_diff` sent window `start`/`end` to
+  `/api/traces` in milliseconds (the API expects microseconds), so windows resolved to 1970 and returned no
+  traces. Verified against live Jaeger.
+- `jaeger_critical_path` summed nested span durations, reporting a critical path above 100% of the trace;
+  it now accumulates self time.
+- Service names are URL-encoded in `/api/services/{service}/operations`.
+- Malformed or negative `JAEGER_TIMEOUT` / `JAEGER_RETRY_ATTEMPTS` / `JAEGER_CACHE_TTL` / `JAEGER_CONCURRENCY_LIMIT`
+  now raise a clear `ConfigError` instead of a bare `ValueError`.
+
+### Added
+
+- Jaeger v2.22+ support: automatic fallback to `/api/v3/*` when the v1 services/operations/search endpoints 404.
+- Python 3.13 in the CI matrix and classifiers; CI actions bumped to Node 24 versions; GitHub Release is
+  created with `gh` instead of the archived `actions/create-release`.
+- Auto-release stamps notes staged under `## [Unreleased]` with the new version.
+
+### Changed
+
+- Test fixtures use neutral example service names.
+
 ## [0.6.5] — 2026-10-29
 
 ### Added

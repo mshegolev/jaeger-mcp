@@ -41,6 +41,14 @@ The existing Jaeger integrations require a running UI or custom scripts. This se
 | `jaeger_regression_diff` | `GET /api/traces` ×2 | Classify per-operation regressions between two time windows |
 | `jaeger_test_profile` | `GET /api/traces` | Per-operation latency hotspots for a tagged test run |
 
+## Compatibility
+
+Tested against live Jaeger `v1.76` (classic `/api/*` query API) and `v2.22` (OTLP-based). Jaeger v2.22 no
+longer serves `/api/services`, `/api/services/{service}/operations` and the `/api/traces` search; this
+server automatically falls back to `/api/v3/*` when the v1 endpoint returns 404 and converts the result
+back, so all tools work on both. `/api/dependencies` and `/api/traces/{id}` are still used where available.
+The `mcp` dependency is pinned `<2` (the 2.x SDK renamed `FastMCP` to `MCPServer`).
+
 ## Installation
 
 ```bash
@@ -67,6 +75,7 @@ All configuration is via environment variables:
 | `JAEGER_TIMEOUT` | No | `30` | HTTP request timeout in seconds |
 | `JAEGER_RETRY_ATTEMPTS` | No | `3` | Retry count for transient failures (0 to disable) |
 | `JAEGER_CACHE_TTL` | No | `120` | TTL in seconds for discovery endpoint cache (0 to disable) |
+| `JAEGER_CONCURRENCY_LIMIT` | No | `10` | Max parallel requests when fetching many traces |
 
 Copy `.env.example` to `.env` and fill in your values.
 

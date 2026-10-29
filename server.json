@@ -48,6 +48,27 @@
           "isRequired": false,
           "format": "string",
           "default": "true"
+        },
+        {
+          "name": "JAEGER_TIMEOUT",
+          "description": "HTTP request timeout in seconds.",
+          "isRequired": false,
+          "format": "string",
+          "default": "30"
+        },
+        {
+          "name": "JAEGER_RETRY_ATTEMPTS",
+          "description": "Retry attempts for transient failures (0 disables).",
+          "isRequired": false,
+          "format": "string",
+          "default": "3"
+        },
+        {
+          "name": "JAEGER_CACHE_TTL",
+          "description": "TTL in seconds for the discovery cache (0 disables).",
+          "isRequired": false,
+          "format": "string",
+          "default": "120"
         }
       ]
     }
