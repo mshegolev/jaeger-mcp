@@ -861,17 +861,17 @@ class JaegerClient:
 
         client = await get_client()
 
-        # Convert timestamps to milliseconds for Jaeger API
+        # /api/traces start/end are MICROSECONDS since epoch (unlike /api/dependencies endTs, which is ms)
         baseline_params = {
             "service": service,
-            "start": baseline_start // 1000,  # microseconds to milliseconds
-            "end": baseline_end // 1000,
+            "start": baseline_start,
+            "end": baseline_end,
             "limit": limit,
         }
         comparison_params = {
             "service": service,
-            "start": comparison_start // 1000,
-            "end": comparison_end // 1000,
+            "start": comparison_start,
+            "end": comparison_end,
             "limit": limit,
         }
 
@@ -1020,17 +1020,17 @@ class JaegerClient:
         baseline_end_us = current_start_us
         baseline_start_us = baseline_end_us - (baseline_duration_minutes * 60 * 1_000_000)
 
-        # Convert timestamps to milliseconds for Jaeger API
+        # /api/traces start/end are MICROSECONDS since epoch (unlike /api/dependencies endTs, which is ms)
         baseline_params = {
             "service": service,
-            "start": baseline_start_us // 1000,
-            "end": baseline_end_us // 1000,
+            "start": baseline_start_us,
+            "end": baseline_end_us,
             "limit": 200,  # Larger limit for baseline
         }
         current_params = {
             "service": service,
-            "start": current_start_us // 1000,
-            "end": current_end_us // 1000,
+            "start": current_start_us,
+            "end": current_end_us,
             "limit": 100,  # Smaller limit for current (more recent)
         }
 
