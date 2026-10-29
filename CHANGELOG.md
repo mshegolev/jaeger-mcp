@@ -4,6 +4,12 @@
 
 - Automated version bump
 
+### Notes
+
+- 0.6.2 and 0.6.3 were tagged and released on GitHub but never reached PyPI:
+  tags pushed by auto-release with `GITHUB_TOKEN` do not trigger `publish.yml`.
+  PyPI went 0.6.1 -> next release, which includes everything in 0.6.2 and 0.6.3.
+
 ## [0.6.2] — 2026-08-07
 
 ### Added
